@@ -1,0 +1,1448 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>오도고도 (odogodo)</title>
+<meta name="color-scheme" content="dark">
+<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=087df90dc4fa46d895cf2b1e374d3eff&libraries=services"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<style>
+  :root {
+    --bg:       #0b0f14;
+    --surface:  #131c27;
+    --card:     #1a2740;
+    --border:   #263550;
+    --accent:   #38bdf8;
+    --text:     #dde5ef;
+    --dim:      #5a7a9a;
+    --radius:   14px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden;
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  }
+
+  /* ── 지도 셸: 페이지 전체가 지도 배경 ── */
+  #mapShell { position:fixed; inset:0; width:100vw; height:100vh; }
+  #mapKakao, #mapOsm { position:absolute; inset:0; width:100%; height:100%; }
+  #mapKakao[hidden], #mapOsm[hidden] { display:none; }
+
+  /* ── 플로팅 아이콘 버튼 (gpx-restorer .wpt-map-tool-btn 패턴 재사용) ── */
+  .icon-btn {
+    width:36px;
+    height:36px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:50%;
+    border:1px solid var(--border);
+    background:var(--card);
+    color:var(--dim);
+    font-size:1rem;
+    cursor:pointer;
+    font-family:inherit;
+    padding:0;
+    box-shadow:0 2px 8px rgba(0,0,0,.35);
+  }
+  .icon-btn:hover { color:var(--text); border-color:var(--accent); }
+  .icon-btn.active { color:var(--accent); border-color:var(--accent); background:rgba(56,189,248,.12); }
+  .icon-btn:disabled { opacity:.4; cursor:default; }
+  .icon-btn:disabled:hover { color:var(--dim); border-color:var(--border); }
+
+  .toolbar-group {
+    position:absolute;
+    display:flex;
+    gap:8px;
+    z-index:500;
+  }
+  #toolbarTopLeft { top:14px; left:14px; }
+  #toolbarBottomRight { bottom:14px; right:14px; flex-direction:column; }
+
+  /* ── 우상단: 코스 정보 카드 + 검색/설정 ── */
+  #courseInfoCard {
+    position:absolute; top:14px; right:14px; z-index:500;
+    display:flex; flex-direction:column; align-items:flex-end; gap:8px;
+  }
+  #courseInfoCard .card {
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:10px 14px;
+    box-shadow:0 2px 8px rgba(0,0,0,.35);
+    min-width:200px;
+  }
+  #courseInfoCard .card .name { font-weight:700; font-size:.92rem; }
+  #courseInfoCard .card .stats { color:var(--dim); font-size:.78rem; margin-top:2px; }
+  #courseInfoCard .row { display:flex; gap:8px; align-items:center; }
+  #courseInfoCard .row label { display:flex; align-items:center; gap:6px; font-size:.82rem; color:var(--dim);
+    background:var(--card); border:1px solid var(--border); border-radius:999px; padding:6px 12px; }
+
+  /* ── 토글 패널 (고도 차트 / 웨이포인트 목록) ── */
+  .panel {
+    position:absolute;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    box-shadow:0 4px 16px rgba(0,0,0,.4);
+    z-index:600;
+    padding:14px;
+  }
+  .panel[hidden] { display:none; }
+  .panel-inline { position:static; } /* courseInfoCard의 flex column 안에서 자연스럽게 쌓이도록 */
+  #elevationPanel { left:14px; right:14px; bottom:64px; max-width:560px; height:160px; }
+  #waypointListPanel { width:260px; max-height:60vh; overflow-y:auto; }
+  .panel-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  .panel h3 { font-size:.85rem; color:var(--dim); }
+  .panel-close {
+    width:22px; height:22px; border-radius:50%; border:none; background:transparent;
+    color:var(--dim); font-size:.9rem; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  .panel-close:hover { color:var(--text); background:var(--card); }
+  .climb-item, .wpt-row, .section-row {
+    display:flex; justify-content:space-between; align-items:center; gap:6px;
+    padding:6px 0; border-bottom:1px solid var(--border); font-size:.78rem;
+  }
+  .climb-item button, .wpt-row .del-btn, .section-row button {
+    font-size:.72rem; padding:4px 8px; border-radius:6px; border:1px solid var(--border);
+    background:var(--card); color:var(--text); cursor:pointer; flex-shrink:0;
+  }
+  .wpt-row-main { min-width:0; }
+  .wpt-row-main small.wpt-garmin-warn { display:block; color:#f0a500; font-size:.7rem; margin-top:2px; }
+  .climb-item button:disabled, .section-row button:disabled { opacity:.4; cursor:default; }
+  .section-row.active { color:var(--accent); }
+  .section-row .name { cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .section-swatch { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; flex-shrink:0; }
+  .section-row .btns { display:flex; gap:4px; flex-shrink:0; }
+  #courseInfoCard .status { font-size:.76rem; color:var(--accent); margin-top:2px; }
+
+  /* ── 지도 클릭 메뉴 (웨이포인트 추가/섹션 분할/카카오맵·로드뷰 보기) ── */
+  .map-click-menu {
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    box-shadow:0 4px 16px rgba(0,0,0,.4); padding:6px; min-width:160px;
+    display:flex; flex-direction:column; gap:2px;
+  }
+  .map-click-menu .mcm-item {
+    display:block; text-align:left; background:none; border:none; color:var(--text);
+    font-size:.82rem; padding:8px 10px; border-radius:6px; cursor:pointer; text-decoration:none;
+    font-family:inherit; white-space:nowrap;
+  }
+  .map-click-menu .mcm-item:hover { background:var(--card); }
+  .map-click-menu .mcm-name {
+    width:100%; padding:6px 8px; border-radius:6px; border:1px solid var(--border);
+    background:var(--card); color:var(--text); font-size:.82rem; margin-bottom:6px; font-family:inherit;
+  }
+  .map-click-menu .mcm-type {
+    width:100%; padding:6px 8px; border-radius:6px; border:1px solid var(--border);
+    background:var(--card); color:var(--text); font-size:.82rem; margin-bottom:6px; font-family:inherit;
+  }
+  .map-click-menu .mcm-btns { display:flex; gap:6px; }
+  .map-click-menu .mcm-btns button {
+    flex:1; padding:6px 0; border-radius:6px; border:1px solid var(--border);
+    background:var(--card); color:var(--text); font-size:.8rem; cursor:pointer; font-family:inherit;
+  }
+  .map-click-menu .mcm-save { border-color:var(--accent); color:var(--accent); }
+
+  /* Leaflet 기본 팝업의 흰 배경/그림자 박스를 없애고 우리 dark 메뉴만 보이게 */
+  .leaflet-popup-content-wrapper { background:transparent; box-shadow:none; padding:0; border-radius:0; }
+  .leaflet-popup-content { margin:0; }
+  .leaflet-popup-tip-container { display:none; }
+  .leaflet-popup-close-button { color:var(--dim) !important; }
+  .leaflet-popup-close-button:hover { color:var(--text) !important; }
+
+  /* ── 파일 열기: 새로 열기 vs 새 구간 추가 선택 모달 ── */
+  .modal-overlay {
+    position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:1000;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .modal-overlay[hidden] { display:none; }
+  .modal-box {
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:16px; min-width:260px; box-shadow:0 8px 24px rgba(0,0,0,.5);
+    display:flex; flex-direction:column; gap:4px;
+  }
+  .modal-box .modal-title { font-size:.85rem; color:var(--dim); margin-bottom:8px; }
+
+  @media (max-width:520px) {
+    #courseInfoCard .card { min-width:150px; }
+    #waypointListPanel, #sectionListPanel { width:200px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="mapShell">
+  <div id="mapKakao"></div>
+  <div id="mapOsm" hidden></div>
+</div>
+
+<div id="toolbarTopLeft" class="toolbar-group">
+  <button type="button" class="icon-btn" id="btnNew" title="새로 만들기">📄</button>
+  <button type="button" class="icon-btn" id="btnOpen" title="열기">📂</button>
+  <button type="button" class="icon-btn" id="btnSave" title="저장">💾</button>
+  <button type="button" class="icon-btn" id="btnShare" title="공유">📤</button>
+  <button type="button" class="icon-btn" id="btnDownload" title="다운로드">⬇️</button>
+  <button type="button" class="icon-btn" id="btnCorrect" title="고도 보정 (스트라바)" disabled>🎯</button>
+  <button type="button" class="icon-btn" id="btnUndo" title="실행취소" disabled>↶</button>
+  <button type="button" class="icon-btn" id="btnRedo" title="다시실행" disabled>↷</button>
+  <button type="button" class="icon-btn" id="btnMenu" title="메뉴">⋮</button>
+</div>
+<input type="file" id="fileInput" accept=".gpx,.tcx" hidden>
+
+<div id="fileOpenDialog" class="modal-overlay" hidden>
+  <div class="modal-box map-click-menu">
+    <div class="modal-title">이 파일을 어떻게 열까요?</div>
+    <button type="button" id="fodNew" class="mcm-item">🆕 새로 열기 (기존 구간 지우고 시작)</button>
+    <button type="button" id="fodAppend" class="mcm-item">➕ 새 구간으로 추가</button>
+    <button type="button" id="fodCancel" class="mcm-item" style="color:var(--dim);">취소</button>
+  </div>
+</div>
+
+<div id="courseInfoCard">
+  <div class="card">
+    <div class="name" id="courseNameText">이름 없는 코스</div>
+    <div class="stats" id="courseStatsText">0.0km · ↑0m</div>
+    <div class="status" id="courseStatusText" hidden></div>
+  </div>
+  <div class="row">
+    <label title="Ctrl+A로도 켜고 끌 수 있음"><input type="checkbox" id="autoRouteToggle" checked> 자동 경로</label>
+    <button type="button" class="icon-btn" id="btnSettings" title="설정">⚙️</button>
+    <button type="button" class="icon-btn" id="btnSearch" title="검색">🔍</button>
+  </div>
+
+  <div id="settingsPanel" class="panel panel-inline" hidden style="width:200px;">
+    <div class="panel-head"><h3>설정</h3><button type="button" class="panel-close" data-close-panel="settingsPanel" data-close-btn="btnSettings">✕</button></div>
+    <div style="font-size:.8rem; color:var(--dim); margin-bottom:6px;">지도 (기본: 좌표 기반 자동)</div>
+    <div style="display:flex; gap:8px;">
+      <button type="button" class="icon-btn provider-btn" id="btnProviderKakao" style="width:auto; border-radius:8px; padding:6px 12px; font-size:.8rem;">카카오맵</button>
+      <button type="button" class="icon-btn provider-btn" id="btnProviderOsm" style="width:auto; border-radius:8px; padding:6px 12px; font-size:.8rem;">OSM</button>
+    </div>
+    <div style="font-size:.8rem; color:var(--dim); margin:10px 0 6px;">카카오맵 타입 <span style="opacity:.7;">(Ctrl+M: OSM ↔ 카카오맵 도로)</span></div>
+    <div style="display:flex; gap:8px;">
+      <button type="button" class="icon-btn kakao-type-btn" id="btnKakaoRoad" style="width:auto; border-radius:8px; padding:6px 10px; font-size:.78rem;">도로</button>
+      <button type="button" class="icon-btn kakao-type-btn" id="btnKakaoSkyview" style="width:auto; border-radius:8px; padding:6px 10px; font-size:.78rem;">위성</button>
+      <button type="button" class="icon-btn kakao-type-btn" id="btnKakaoHybrid" style="width:auto; border-radius:8px; padding:6px 10px; font-size:.78rem;">혼합</button>
+    </div>
+    <div style="font-size:.8rem; color:var(--dim); margin:10px 0 6px;">자동 경로 프로파일</div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+      <button type="button" class="icon-btn profile-btn" id="btnProfileRegular" style="width:auto; border-radius:8px; padding:6px 10px; font-size:.78rem;">자전거</button>
+      <button type="button" class="icon-btn profile-btn" id="btnProfileCar" style="width:auto; border-radius:8px; padding:6px 10px; font-size:.78rem;">일반도로</button>
+    </div>
+  </div>
+
+  <div id="sectionListPanel" class="panel panel-inline" hidden style="width:280px;">
+    <div class="panel-head"><h3>구간</h3><button type="button" class="panel-close" data-close-panel="sectionListPanel" data-close-btn="btnSectionListToggle">✕</button></div>
+    <button type="button" id="btnAddSection" class="icon-btn" style="width:auto; border-radius:8px; padding:6px 12px; font-size:.8rem; margin-bottom:8px;">➕ 새 구간 추가</button>
+    <div id="sectionListBody" style="color:var(--dim); font-size:.8rem;">파일을 불러오면 여기 표시됩니다.</div>
+  </div>
+
+  <div id="waypointListPanel" class="panel panel-inline" hidden style="width:280px;">
+    <div class="panel-head"><h3>웨이포인트</h3><button type="button" class="panel-close" data-close-panel="waypointListPanel" data-close-btn="btnWptListToggle">✕</button></div>
+    <button type="button" id="btnDetectClimbs" class="icon-btn" disabled
+      style="width:auto; border-radius:8px; padding:6px 12px; font-size:.8rem; margin-bottom:8px;">⛰️ 오르막 자동 감지</button>
+    <div id="climbResults"></div>
+    <div id="wptListBody" style="color:var(--dim); font-size:.8rem;">파일을 불러오면 여기 표시됩니다.</div>
+  </div>
+</div>
+
+<div id="toolbarBottomRight" class="toolbar-group">
+  <button type="button" class="icon-btn" id="btnZoomIn" title="확대">＋</button>
+  <button type="button" class="icon-btn" id="btnZoomOut" title="축소">－</button>
+  <button type="button" class="icon-btn" id="btnLocate" title="내 위치" disabled>⌖</button>
+  <button type="button" class="icon-btn" id="btnElevationToggle" title="고도 차트">📈</button>
+  <button type="button" class="icon-btn" id="btnSectionListToggle" title="구간 목록">🧩</button>
+  <button type="button" class="icon-btn" id="btnWptListToggle" title="웨이포인트 목록">📋</button>
+</div>
+
+<div id="elevationPanel" class="panel" hidden>
+  <div class="panel-head"><h3>고도 프로파일</h3><button type="button" class="panel-close" data-close-panel="elevationPanel" data-close-btn="btnElevationToggle">✕</button></div>
+  <div style="color:var(--dim); font-size:.8rem;">경로를 그리면 여기에 표시됩니다. (Phase B에서 연동)</div>
+</div>
+
+<script>
+// ── 국내/해외 판정 (gpx-restorer index.html:1951 이식, verbatim) ──
+function isInKorea(lat, lon) {
+  return lat >= 33 && lat <= 38.7 && lon >= 124.5 && lon <= 132;
+}
+
+// ── 지도 상태 ──
+const DEFAULT_CENTER = { lat: 37.5665, lon: 126.9780 }; // 서울
+let mapProvider = isInKorea(DEFAULT_CENTER.lat, DEFAULT_CENTER.lon) ? 'kakao' : 'osm';
+let kakaoMap = null;
+let osmMap = null;
+
+function initKakaoMap() {
+  if (kakaoMap) return;
+  if (typeof kakao === 'undefined' || !kakao.maps) return; // 로컬(도메인 미등록)에서는 정상적으로 실패함
+  kakaoMap = new kakao.maps.Map(document.getElementById('mapKakao'), {
+    center: new kakao.maps.LatLng(DEFAULT_CENTER.lat, DEFAULT_CENTER.lon),
+    level: 7
+  });
+  kakao.maps.event.addListener(kakaoMap, 'click', e => handleMapClick(e.latLng.getLat(), e.latLng.getLng(), e.point));
+}
+
+function initOsmMap() {
+  if (osmMap) return;
+  osmMap = L.map('mapOsm', { zoomControl: false }).setView([DEFAULT_CENTER.lat, DEFAULT_CENTER.lon], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(osmMap);
+  osmMap.on('click', e => handleMapClick(e.latlng.lat, e.latlng.lng, e.containerPoint));
+
+  // 줌 애니메이션 watchdog — 일부 환경(자동화 테스트 환경에서 실측됨, 실사용 브라우저는 보통 정상)에서
+  // CSS transitionend가 안 걸려서 Leaflet 내부 _animatingZoom 플래그가 영구히 안 풀리고 이후 줌이 전부
+  // 무시되는 문제가 있었음. 애니메이션은 그대로 켜두되(부드러운 줌), 일정 시간 안에 zoomend가 안 오면
+  // 최소한 플래그만 풀어서 "한 번 막히면 이후 줌이 전부 씹힘"은 방지함 (그 순간의 줌 자체는 못 살리지만
+  // 다음 줌부터는 다시 정상 동작 — 애니메이션 자체가 없는 것보다 이 정도 안전장치가 낫다고 판단)
+  let zoomWatchdog = null;
+  osmMap.on('zoomstart', () => {
+    clearTimeout(zoomWatchdog);
+    zoomWatchdog = setTimeout(() => { osmMap._animatingZoom = false; }, 500);
+  });
+  osmMap.on('zoomend', () => clearTimeout(zoomWatchdog));
+}
+
+function applyMapProvider() {
+  const kakaoEl = document.getElementById('mapKakao');
+  const osmEl = document.getElementById('mapOsm');
+  // 카카오 SDK가 아예 로드 안 됐으면(로컬/도메인 미등록 등) OSM으로 자동 폴백
+  if (mapProvider === 'kakao' && (typeof kakao === 'undefined' || !kakao.maps)) {
+    mapProvider = 'osm';
+  }
+  if (mapProvider === 'kakao') {
+    kakaoEl.hidden = false; osmEl.hidden = true;
+    initKakaoMap();
+  } else {
+    osmEl.hidden = false; kakaoEl.hidden = true;
+    initOsmMap();
+    setTimeout(() => { if (osmMap) osmMap.invalidateSize(); }, 50);
+  }
+}
+applyMapProvider();
+
+// ── 줌 버튼 (현재 활성 프로바이더에 위임) ──
+document.getElementById('btnZoomIn').addEventListener('click', () => {
+  if (mapProvider === 'kakao' && kakaoMap) kakaoMap.setLevel(kakaoMap.getLevel() - 1);
+  else if (osmMap) osmMap.zoomIn();
+});
+document.getElementById('btnZoomOut').addEventListener('click', () => {
+  if (mapProvider === 'kakao' && kakaoMap) kakaoMap.setLevel(kakaoMap.getLevel() + 1);
+  else if (osmMap) osmMap.zoomOut();
+});
+
+// ── 패널 토글 (지도와 무관, 순수 DOM) ──
+function togglePanel(panelId, btnId) {
+  const panel = document.getElementById(panelId);
+  const btn = document.getElementById(btnId);
+  panel.hidden = !panel.hidden;
+  btn.classList.toggle('active', !panel.hidden);
+}
+document.getElementById('btnElevationToggle').addEventListener('click', () => togglePanel('elevationPanel', 'btnElevationToggle'));
+document.getElementById('btnWptListToggle').addEventListener('click', () => togglePanel('waypointListPanel', 'btnWptListToggle'));
+document.getElementById('btnSectionListToggle').addEventListener('click', () => togglePanel('sectionListPanel', 'btnSectionListToggle'));
+document.getElementById('btnSettings').addEventListener('click', () => togglePanel('settingsPanel', 'btnSettings'));
+
+// ── 패널 안의 ✕ 닫기 버튼 (아이콘을 다시 눌러야만 닫히는 걸 몰라서 못 닫는 문제 방지) ──
+document.querySelectorAll('.panel-close').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.getElementById(btn.dataset.closePanel).hidden = true;
+    document.getElementById(btn.dataset.closeBtn).classList.remove('active');
+  });
+});
+
+// ── 지도 수동 스왑 (설정 메뉴) — 기본은 좌표 기반 자동이지만, 여기서 직접 고를 수 있음 ──
+function syncProviderButtons() {
+  document.getElementById('btnProviderKakao').classList.toggle('active', mapProvider === 'kakao');
+  document.getElementById('btnProviderOsm').classList.toggle('active', mapProvider === 'osm');
+}
+document.getElementById('btnProviderKakao').addEventListener('click', () => {
+  mapProvider = 'kakao';
+  applyMapProvider();
+  syncProviderButtons();
+});
+document.getElementById('btnProviderOsm').addEventListener('click', () => {
+  mapProvider = 'osm';
+  applyMapProvider();
+  syncProviderButtons();
+});
+syncProviderButtons();
+
+// ── 카카오맵 타입: 도로/위성(SKYVIEW)/혼합(HYBRID) — 라이딩가즈아와 동일한 3종 ──
+let kakaoMapType = 'ROADMAP';
+function syncKakaoTypeButtons() {
+  document.getElementById('btnKakaoRoad').classList.toggle('active', kakaoMapType === 'ROADMAP');
+  document.getElementById('btnKakaoSkyview').classList.toggle('active', kakaoMapType === 'SKYVIEW');
+  document.getElementById('btnKakaoHybrid').classList.toggle('active', kakaoMapType === 'HYBRID');
+}
+function setKakaoMapType(type) {
+  kakaoMapType = type;
+  if (mapProvider !== 'kakao') { mapProvider = 'kakao'; applyMapProvider(); syncProviderButtons(); }
+  if (kakaoMap) kakaoMap.setMapTypeId(kakao.maps.MapTypeId[type]);
+  syncKakaoTypeButtons();
+}
+document.getElementById('btnKakaoRoad').addEventListener('click', () => setKakaoMapType('ROADMAP'));
+document.getElementById('btnKakaoSkyview').addEventListener('click', () => setKakaoMapType('SKYVIEW'));
+document.getElementById('btnKakaoHybrid').addEventListener('click', () => setKakaoMapType('HYBRID'));
+syncKakaoTypeButtons();
+
+// ── 자동 경로 프로파일: 자전거 / 일반도로 — 나스 ORS 서버에 해당 프로파일이 켜져 있어야 실제로 작동함
+// (원래 4종까지 넣었다가 나스 메모리 부족(OutOfMemoryError)으로 실패해서 2개로 축소 — 라이딩가즈아 기준으로도 이 정도면 충분) ──
+let orsProfile = (function () { try { return localStorage.getItem('orsProfile') || 'cycling-regular'; } catch (e) { return 'cycling-regular'; } })();
+function syncProfileButtons() {
+  document.getElementById('btnProfileRegular').classList.toggle('active', orsProfile === 'cycling-regular');
+  document.getElementById('btnProfileCar').classList.toggle('active', orsProfile === 'driving-car');
+}
+function setOrsProfile(p) {
+  orsProfile = p;
+  try { localStorage.setItem('orsProfile', p); } catch (e) {}
+  syncProfileButtons();
+}
+document.getElementById('btnProfileRegular').addEventListener('click', () => setOrsProfile('cycling-regular'));
+document.getElementById('btnProfileCar').addEventListener('click', () => setOrsProfile('driving-car'));
+syncProfileButtons();
+
+// ── Ctrl+M: OSM ↔ 카카오맵(도로) 단축키 토글 ──
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') {
+    e.preventDefault();
+    if (mapProvider === 'osm') {
+      kakaoMapType = 'ROADMAP';
+      mapProvider = 'kakao';
+      applyMapProvider();
+      if (kakaoMap) kakaoMap.setMapTypeId(kakao.maps.MapTypeId.ROADMAP);
+    } else {
+      mapProvider = 'osm';
+      applyMapProvider();
+    }
+    syncProviderButtons();
+    syncKakaoTypeButtons();
+  }
+});
+
+// ── Ctrl+A: 자동 경로 체크 토글 ──
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+    e.preventDefault();
+    const cb = document.getElementById('autoRouteToggle');
+    cb.checked = !cb.checked;
+  }
+});
+
+window.addEventListener('resize', () => { if (mapProvider === 'osm' && osmMap) osmMap.invalidateSize(); });
+
+// ═══════════════════════════════════════════════════════
+//  공통 유틸 (gpx-restorer index.html에서 이식, verbatim)
+// ═══════════════════════════════════════════════════════
+function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function decodeXml(s) { const el = document.createElement('textarea'); el.innerHTML = s; return el.value; }
+function fmtNum(n, decimals = 0) { return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }); }
+function haversine(a, b) {
+  const R = 6371000;
+  const f1 = a.lat * Math.PI/180, f2 = b.lat * Math.PI/180;
+  const df = (b.lat - a.lat) * Math.PI/180, dl = (b.lon - a.lon) * Math.PI/180;
+  const x = Math.sin(df/2)**2 + Math.cos(f1)*Math.cos(f2)*Math.sin(dl/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+}
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const f1 = lat1 * Math.PI / 180, f2 = lat2 * Math.PI / 180;
+  const df = (lat2 - lat1) * Math.PI / 180, dl = (lon2 - lon1) * Math.PI / 180;
+  const x = Math.sin(df / 2) ** 2 + Math.cos(f1) * Math.cos(f2) * Math.sin(dl / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+function pointToPolylineDistanceM(lat, lon, polyline) {
+  let best = Infinity;
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const [lat1, lon1] = polyline[i], [lat2, lon2] = polyline[i + 1];
+    const toXY = (la, lo) => [lo * Math.cos(lat * Math.PI / 180) * 111320, la * 110540];
+    const [x, y] = toXY(lat, lon);
+    const [x1, y1] = toXY(lat1, lon1);
+    const [x2, y2] = toXY(lat2, lon2);
+    const dx = x2 - x1, dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq > 0 ? ((x - x1) * dx + (y - y1) * dy) / lenSq : 0;
+    t = Math.max(0, Math.min(1, t));
+    const px = x1 + t * dx, py = y1 + t * dy;
+    const d = Math.sqrt((x - px) ** 2 + (y - py) ** 2);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+const WPT_ICONS = {
+  'generic':'📍','summit':'⛰️','valley':'🏞️','water':'💧','food':'🍴',
+  'danger':'⚠️','left':'↰','right':'↱','straight':'⬆️','first aid':'⛑️',
+  'sprint':'💨','4th category':'🚵','3rd category':'🚵','2nd category':'🚵',
+  '1st category':'🚵','hors category':'🚵'
+};
+const wptIcon = type => WPT_ICONS[(type || '').toLowerCase()] || '📍';
+
+// ── 가민 웨이포인트 이름 글자수 — 영문/숫자/공백/기호는 1, 한글은 3으로 계산해서 합 15 넘으면 가민에서 뒤가 잘림 (gpx-restorer index.html 이식) ──
+const GARMIN_NAME_LIMIT = 15;
+function isHangulChar(ch) {
+  const cp = ch.codePointAt(0);
+  return (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0x1100 && cp <= 0x11FF) || (cp >= 0x3130 && cp <= 0x318F);
+}
+function garminNameWeight(name) {
+  let w = 0;
+  for (const ch of String(name || '')) w += isHangulChar(ch) ? 3 : 1;
+  return w;
+}
+function garminTruncate(name, limit = GARMIN_NAME_LIMIT) {
+  let w = 0, out = '';
+  for (const ch of String(name || '')) {
+    const cw = isHangulChar(ch) ? 3 : 1;
+    if (w + cw > limit) break;
+    w += cw; out += ch;
+  }
+  return out;
+}
+// 15자 넘을 때만 "가민: 잘린이름" 미리보기 HTML — 안 넘으면 빈 문자열
+function garminPreviewHtml(name) {
+  if (garminNameWeight(name) <= GARMIN_NAME_LIMIT) return '';
+  return `<small class="wpt-garmin-warn" title="가민 기기에서는 15자(한글 3자 환산) 제한으로 이렇게 잘려서 표시됩니다">가민: ${escapeHtml(garminTruncate(name))}</small>`;
+}
+
+// 편집 드롭다운 표시용 — 라벨은 한글, 저장되는 값(type)은 가민 표준 영문 그대로 (gpx-restorer index.html:1846 이식)
+const WPT_TYPE_OPTIONS = [
+  { value:'Generic',       label:'일반' },
+  { value:'Summit',        label:'정상' },
+  { value:'Valley',        label:'계곡' },
+  { value:'Water',         label:'물' },
+  { value:'Food',          label:'음식' },
+  { value:'Danger',        label:'위험' },
+  { value:'Left',          label:'좌회전' },
+  { value:'Right',         label:'우회전' },
+  { value:'Straight',      label:'직진' },
+  { value:'First Aid',     label:'응급처치' }
+];
+
+const STRAVA_BACKEND_URL = 'https://strava-corrector.strava-corrector.workers.dev';
+const NAS_PLACENAME_URL = 'https://placename.nimario.synology.me';
+async function fetchPlaceInfo(lat, lon) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    const res = await fetch(`${NAS_PLACENAME_URL}/api/placename?lat=${lat}&lon=${lon}`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return { name: null, tunnels: [] };
+    const data = await res.json();
+    return { name: data.name || null, tunnels: data.tunnels || [] };
+  } catch (e) {
+    return { name: null, tunnels: [] };
+  }
+}
+
+// 정상이 터널 안이면 입구(진행방향 기준 먼저 만나는 쪽)로 웨이포인트 위치를 옮김
+function findTunnelEntrance(points, cumDist, peakIdx, tunnels, routeToleranceM = 60, minOverlapM = 200) {
+  const peakDist = cumDist[peakIdx];
+  const windowM = 2200;
+  let lo = peakIdx, hi = peakIdx;
+  while (lo > 0 && peakDist - cumDist[lo] < windowM) lo--;
+  while (hi < points.length - 1 && cumDist[hi] - peakDist < windowM) hi++;
+  let best = null;
+  for (const tunnel of tunnels) {
+    const geometry = tunnel.geometry;
+    if (!geometry || geometry.length < 2) continue;
+    const inside = [];
+    for (let i = lo; i <= hi; i++) {
+      const d = pointToPolylineDistanceM(points[i].lat, points[i].lon, geometry);
+      if (d <= routeToleranceM) inside.push(i);
+    }
+    if (inside.length === 0) continue;
+    const groups = [[inside[0]]];
+    for (let k = 1; k < inside.length; k++) {
+      if (inside[k] <= groups[groups.length - 1][groups[groups.length - 1].length - 1] + 3) groups[groups.length - 1].push(inside[k]);
+      else groups.push([inside[k]]);
+    }
+    for (const group of groups) {
+      const startIdx = group[0], endIdx = group[group.length - 1];
+      const overlapM = cumDist[endIdx] - cumDist[startIdx];
+      if (overlapM < minOverlapM) continue;
+      const midDist = (cumDist[startIdx] + cumDist[endIdx]) / 2;
+      if (Math.abs(midDist - peakDist) > windowM) continue;
+      const [eLat0, eLon0] = geometry[0];
+      const [eLat1, eLon1] = geometry[geometry.length - 1];
+      let nearestToStart = group[0], bestD0 = Infinity;
+      let nearestToEnd = group[0], bestD1 = Infinity;
+      for (const idx of group) {
+        const d0 = haversineM(points[idx].lat, points[idx].lon, eLat0, eLon0);
+        const d1 = haversineM(points[idx].lat, points[idx].lon, eLat1, eLon1);
+        if (d0 < bestD0) { bestD0 = d0; nearestToStart = idx; }
+        if (d1 < bestD1) { bestD1 = d1; nearestToEnd = idx; }
+      }
+      const entranceIdx = Math.min(nearestToStart, nearestToEnd);
+      if (!best || overlapM > best.overlapM) best = { overlapM, entranceIdx, tunnelName: tunnel.name };
+    }
+  }
+  return best;
+}
+function tunnelWaypointLabel(name) {
+  const base = name.replace(/\s*(터널|Tunnel)\s*$/i, '').trim();
+  return (base || name) + 'T';
+}
+
+// ═══════════════════════════════════════════════════════
+//  상태 — 코스 = 구간(섹션)들의 순서 있는 목록
+// ═══════════════════════════════════════════════════════
+let sections = [];        // [{ id, name, points, cumDist, waypoints, corrected }]
+let activeSectionId = null;
+let sectionSeq = 0;
+function activeSection() { return sections.find(s => s.id === activeSectionId) || null; }
+const SECTION_COLORS = ['#e63946','#457b9d','#2a9d8f','#e9c46a','#f4a261','#a855f7'];
+function sectionColor(idx) { return SECTION_COLORS[idx % SECTION_COLORS.length]; }
+function calcStatsFor(pts, cum) {
+  if (!pts.length) return { gain: 0, loss: 0, dist: 0 }; // 빈 구간(방금 새로 만든 구간 등) 대비
+  let gain = 0, loss = 0;
+  let baseEle = pts[0].ele;
+  for (let i = 1; i < pts.length; i++) {
+    const diff = pts[i].ele - baseEle;
+    if (diff > 0) gain += diff; else loss += -diff;
+    baseEle = pts[i].ele;
+  }
+  return { gain, loss, dist: cum[cum.length - 1] || 0 };
+}
+
+function parseGpx(text) {
+  const points = [];
+  const trkptRe = /<trkpt\b([^>]*)>([\s\S]*?)<\/trkpt>/g;
+  let m;
+  while ((m = trkptRe.exec(text)) !== null) {
+    const attrs = m[1], inner = m[2];
+    const lat = parseFloat((attrs.match(/lat="([^"]*)"/) || [])[1]);
+    const lon = parseFloat((attrs.match(/lon="([^"]*)"/) || [])[1]);
+    const eleM = inner.match(/<ele>([^<]*)<\/ele>/);
+    const timeM = inner.match(/<time>([^<]*)<\/time>/);
+    if (isNaN(lat) || isNaN(lon)) continue;
+    points.push({ lat, lon, ele: eleM ? parseFloat(eleM[1]) : 0, time: timeM ? timeM[1].trim() : null });
+  }
+  const waypoints = [];
+  const wptRe = /<wpt\b([^>]*)>([\s\S]*?)<\/wpt>/g;
+  while ((m = wptRe.exec(text)) !== null) {
+    const attrs = m[1], inner = m[2];
+    const lat = parseFloat((attrs.match(/lat="([^"]*)"/) || [])[1]);
+    const lon = parseFloat((attrs.match(/lon="([^"]*)"/) || [])[1]);
+    const nameM = inner.match(/<name>([\s\S]*?)<\/name>/);
+    const typeAttrRaw = (attrs.match(/type="([^"]*)"/) || [])[1];
+    const typeM = inner.match(/<type>([\s\S]*?)<\/type>/);
+    if (isNaN(lat) || isNaN(lon)) continue;
+    waypoints.push({ lat, lon, name: nameM ? decodeXml(nameM[1].trim()) : '', type: typeAttrRaw || (typeM ? decodeXml(typeM[1].trim()) : '') || 'Generic' });
+  }
+  return { points, waypoints };
+}
+function parseTcx(text) {
+  const points = [];
+  const tpRe = /<Trackpoint\b[^>]*>([\s\S]*?)<\/Trackpoint>/g;
+  let m;
+  while ((m = tpRe.exec(text)) !== null) {
+    const inner = m[1];
+    const latM = inner.match(/<LatitudeDegrees>([^<]*)<\/LatitudeDegrees>/);
+    const lonM = inner.match(/<LongitudeDegrees>([^<]*)<\/LongitudeDegrees>/);
+    const eleM = inner.match(/<AltitudeMeters>([^<]*)<\/AltitudeMeters>/);
+    const timeM = inner.match(/<Time>([^<]*)<\/Time>/);
+    if (!latM || !lonM) continue;
+    points.push({ lat: parseFloat(latM[1]), lon: parseFloat(lonM[1]), ele: eleM ? parseFloat(eleM[1]) : 0, time: timeM ? timeM[1].trim() : null });
+  }
+  const waypoints = [];
+  const cpRe = /<CoursePoint\b[^>]*>([\s\S]*?)<\/CoursePoint>/g;
+  while ((m = cpRe.exec(text)) !== null) {
+    const inner = m[1];
+    const latM = inner.match(/<LatitudeDegrees>([^<]*)<\/LatitudeDegrees>/);
+    const lonM = inner.match(/<LongitudeDegrees>([^<]*)<\/LongitudeDegrees>/);
+    const nameM = inner.match(/<Name>([\s\S]*?)<\/Name>/);
+    const typeM = inner.match(/<PointType>([\s\S]*?)<\/PointType>/);
+    if (!latM || !lonM) continue;
+    waypoints.push({ lat: parseFloat(latM[1]), lon: parseFloat(lonM[1]), name: nameM ? decodeXml(nameM[1].trim()) : '', type: typeM ? decodeXml(typeM[1].trim()) : 'Generic' });
+  }
+  return { points, waypoints };
+}
+function computeCumDist(pts) {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + haversine(pts[i - 1], pts[i]));
+  return cum;
+}
+function buildGpx(name, pts, wpts) {
+  const esc = escapeHtml(name);
+  let out = '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="elevation-corrector-tool" xmlns="http://www.topografix.com/GPX/1/1">\n<metadata><name>' + esc + '</name></metadata>\n';
+  for (const w of wpts) {
+    const typeVal = w.type || 'Generic';
+    out += '<wpt lat="' + w.lat + '" lon="' + w.lon + '" type="' + escapeHtml(typeVal) + '">';
+    if (w.name) out += '<name>' + escapeHtml(w.name) + '</name>';
+    out += '<type>' + escapeHtml(typeVal).toUpperCase() + '</type>';
+    out += '</wpt>\n';
+  }
+  out += '<trk><name>' + esc + '</name><trkseg>\n';
+  for (const p of pts) {
+    out += '<trkpt lat="' + p.lat + '" lon="' + p.lon + '"><ele>' + p.ele + '</ele>';
+    if (p.time) out += '<time>' + p.time + '</time>';
+    out += '</trkpt>\n';
+  }
+  out += '</trkseg></trk>\n</gpx>';
+  return out;
+}
+
+function renderCourseInfo() {
+  const sec = activeSection();
+  if (!sections.length) {
+    document.getElementById('courseNameText').textContent = '이름 없는 코스';
+    document.getElementById('courseStatsText').textContent = '0.0km · ↑0m';
+    return;
+  }
+  let totalDist = 0, totalGain = 0;
+  sections.forEach(s => { const st = calcStatsFor(s.points, s.cumDist); totalDist += st.dist; totalGain += st.gain; });
+  const idx = sec ? sections.indexOf(sec) : -1;
+  const name = sec ? (sec.name + (sections.length > 1 ? ` (${idx + 1}/${sections.length}구간)` : '')) : '이름 없는 코스';
+  document.getElementById('courseNameText').textContent = name;
+  document.getElementById('courseStatsText').textContent =
+    fmtNum(totalDist / 1000, 1) + 'km · ↑' + fmtNum(Math.round(totalGain)) + 'm' + (sec && sec.corrected ? ' · 현재구간 보정됨' : '');
+}
+function setStatus(msg) {
+  const el = document.getElementById('courseStatusText');
+  if (!msg) { el.hidden = true; el.textContent = ''; return; }
+  el.hidden = false; el.textContent = msg;
+}
+
+// ═══════════════════════════════════════════════════════
+//  지도에 트랙/웨이포인트 그리기
+// ═══════════════════════════════════════════════════════
+let trackLayersKakao = [], trackLayersOsm = [];
+let wptMarkersKakao = [], wptMarkersOsm = [];
+
+function clearMapContent() {
+  trackLayersKakao.forEach(l => l.setMap(null)); trackLayersKakao = [];
+  trackLayersOsm.forEach(l => l.remove()); trackLayersOsm = [];
+  wptMarkersKakao.forEach(o => { o.marker.setMap(null); if (o.label) o.label.setMap(null); });
+  wptMarkersKakao = [];
+  wptMarkersOsm.forEach(m => m.remove());
+  wptMarkersOsm = [];
+}
+
+function renderMapContent(fitView = false) {
+  clearMapContent();
+  if (!sections.length) return;
+
+  if (mapProvider === 'kakao' && kakaoMap) {
+    const bounds = new kakao.maps.LatLngBounds();
+    sections.forEach((sec, idx) => {
+      const path = sec.points.map(p => new kakao.maps.LatLng(p.lat, p.lon));
+      const isActive = sec.id === activeSectionId;
+      const line = new kakao.maps.Polyline({ path, strokeWeight: isActive ? 5 : 3, strokeColor: sectionColor(idx), strokeOpacity: 1, strokeStyle: 'solid' });
+      line.setMap(kakaoMap);
+      trackLayersKakao.push(line);
+      path.forEach(p => bounds.extend(p));
+      sec.waypoints.forEach(w => {
+        const marker = new kakao.maps.Marker({ position: new kakao.maps.LatLng(w.lat, w.lon) });
+        marker.setMap(kakaoMap);
+        kakao.maps.event.addListener(marker, 'click', () => openWptEditPopup(sec, w));
+        const label = new kakao.maps.CustomOverlay({
+          position: new kakao.maps.LatLng(w.lat, w.lon), yAnchor: 2.4,
+          content: `<div style="font-size:18px;">${wptIcon(w.type)}</div>`
+        });
+        label.setMap(kakaoMap);
+        wptMarkersKakao.push({ marker, label });
+      });
+    });
+    if (fitView) kakaoMap.setBounds(bounds);
+  } else if (osmMap) {
+    const allLatLngs = [];
+    sections.forEach((sec, idx) => {
+      const latlngs = sec.points.map(p => [p.lat, p.lon]);
+      const isActive = sec.id === activeSectionId;
+      const line = L.polyline(latlngs, { color: sectionColor(idx), weight: isActive ? 5 : 3 }).addTo(osmMap);
+      trackLayersOsm.push(line);
+      allLatLngs.push(...latlngs);
+      sec.waypoints.forEach(w => {
+        const icon = L.divIcon({ html: `<div style="font-size:20px; transform:translate(-50%,-100%);">${wptIcon(w.type)}</div>`, className: '', iconSize: [0, 0] });
+        const marker = L.marker([w.lat, w.lon], { icon }).addTo(osmMap);
+        marker.on('click', e => { L.DomEvent.stopPropagation(e); openWptEditPopup(sec, w); });
+        wptMarkersOsm.push(marker);
+      });
+    });
+    if (fitView && allLatLngs.length) osmMap.fitBounds(L.latLngBounds(allLatLngs));
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  파일 Import
+// ═══════════════════════════════════════════════════════
+const fileInput = document.getElementById('fileInput');
+document.getElementById('btnOpen').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => {
+  const file = e.target.files[0];
+  fileInput.value = '';
+  if (!file) return;
+  if (sections.length > 0) {
+    showFileOpenDialog(file);
+  } else {
+    addSectionFromFile(file);
+  }
+});
+function resetAllSections() {
+  sections = [];
+  activeSectionId = null;
+  lastClimbs = [];
+  document.getElementById('climbResults').innerHTML = '';
+  renderCourseInfo();
+  renderMapContent();
+  renderWaypointList();
+  renderSectionList();
+  document.getElementById('btnCorrect').disabled = true;
+  document.getElementById('btnDetectClimbs').disabled = true;
+}
+document.getElementById('btnNew').addEventListener('click', resetAllSections);
+
+// 이미 열린 구간이 있는 상태에서 파일을 또 열면: 새로 시작할지, 구간으로 추가할지 선택
+function showFileOpenDialog(file) {
+  const dlg = document.getElementById('fileOpenDialog');
+  dlg.hidden = false;
+  document.getElementById('fodNew').onclick = () => {
+    dlg.hidden = true;
+    resetAllSections();
+    addSectionFromFile(file);
+  };
+  document.getElementById('fodAppend').onclick = () => {
+    dlg.hidden = true;
+    addSectionFromFile(file);
+  };
+  document.getElementById('fodCancel').onclick = () => { dlg.hidden = true; };
+}
+
+// 열기 = 새 구간으로 추가 (또는 위 선택창에서 "새로 열기" 고르면 그 전에 초기화됨)
+function addSectionFromFile(file) {
+  const lower = file.name.toLowerCase();
+  if (!lower.endsWith('.gpx') && !lower.endsWith('.tcx')) { setStatus('GPX/TCX 파일만 지원합니다'); return; }
+  setStatus('파일 읽는 중...');
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    const parsed = lower.endsWith('.tcx') ? parseTcx(text) : parseGpx(text);
+    if (!parsed.points.length) { setStatus('트랙포인트를 찾을 수 없습니다'); return; }
+
+    const pts = parsed.points;
+    const cum = computeCumDist(pts);
+    const wpts = parsed.waypoints
+      .filter(w => w.name.trim() !== 'Control')
+      .map(w => {
+        const idx = nearestIdx(pts, w.lat, w.lon);
+        return { ...w, arrIdx: idx, km: cum[idx] / 1000, ele: pts[idx].ele };
+      });
+    wpts.sort((a, b) => a.arrIdx - b.arrIdx);
+
+    const sec = {
+      id: 'sec_' + (++sectionSeq) + '_' + Date.now(),
+      name: 'Section' + (sections.length + 1), // 파일명이 길면 목록이 안 읽혀서 순번으로 단순화
+      points: pts, cumDist: cum, waypoints: wpts, corrected: false
+    };
+    sections.push(sec);
+    activeSectionId = sec.id;
+
+    renderCourseInfo();
+    renderMapContent(true); // 새로 불러온 파일이니 전체가 보이게 뷰 맞춤
+    renderWaypointList();
+    renderSectionList();
+    setStatus('');
+    document.getElementById('btnCorrect').disabled = false;
+    document.getElementById('btnDetectClimbs').disabled = false;
+  };
+  reader.readAsText(file);
+}
+function nearestIdx(pts, lat, lon) {
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const d = (pts[i].lat - lat) ** 2 + (pts[i].lon - lon) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+function nearestSectionAndIdx(lat, lon) {
+  let best = null, bestD = Infinity;
+  sections.forEach(sec => {
+    if (sec.points.length < 2) return;
+    const d = pointToPolylineDistanceM(lat, lon, sec.points.map(p => [p.lat, p.lon]));
+    if (d < bestD) { bestD = d; best = sec; }
+  });
+  if (!best) return null;
+  return { section: best, idx: nearestIdx(best.points, lat, lon) };
+}
+
+// ═══════════════════════════════════════════════════════
+//  고도 보정 (cf-worker /api/correct 재사용)
+// ═══════════════════════════════════════════════════════
+document.getElementById('btnCorrect').addEventListener('click', async () => {
+  const sec = activeSection();
+  if (!sec || !sec.points.length) return;
+  const btn = document.getElementById('btnCorrect');
+  btn.disabled = true;
+  setStatus('스트라바 업로드 중... (최대 1분)');
+  try {
+    const name = sec.name || 'course';
+    const modifiedGpx = buildGpx(name, sec.points, sec.waypoints);
+    const blob = new Blob([modifiedGpx], { type: 'application/gpx+xml' });
+    const form = new FormData();
+    form.append('file', blob, name + '.gpx');
+    form.append('name', name);
+
+    const res = await fetch(STRAVA_BACKEND_URL + '/api/correct', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Unknown error');
+
+    sec.points = sec.points.map((p, i) => ({ ...p, ele: data.points[i] ? data.points[i].ele : p.ele }));
+    sec.cumDist = computeCumDist(sec.points);
+    sec.waypoints = sec.waypoints.map(w => ({ ...w, ele: sec.points[w.arrIdx].ele }));
+    sec.corrected = true;
+
+    renderCourseInfo();
+    renderMapContent();
+    renderWaypointList();
+    renderSectionList();
+    setStatus(data.originalPointCount !== data.correctedPointCount ? '보정 완료 (재샘플링됨)' : '보정 완료');
+    setTimeout(() => setStatus(''), 3000);
+  } catch (err) {
+    setStatus('보정 실패: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+//  오르막 자동 감지 (gpx-restorer s1DetectClimbs 이식)
+// ═══════════════════════════════════════════════════════
+function findQualifyingSuffix(smoothed, cum, s0, e0) {
+  for (let cut = s0 + 1; cut < e0; cut++) {
+    const lengthM = cum[e0] - cum[cut];
+    const elevGain = smoothed[e0] - smoothed[cut];
+    const grade = lengthM > 0 ? (elevGain / lengthM) * 100 : 0;
+    const score = lengthM * grade;
+    if (lengthM >= 500 && grade >= 3 && score >= 1500) return { startIdx: cut, lengthM, grade, score };
+  }
+  return null;
+}
+function detectClimbs(pts, cum) {
+  if (pts.length < 3) return [];
+  const WIN = 5;
+  const smoothed = pts.map((p, i) => {
+    let sum = 0, cnt = 0;
+    for (let j = Math.max(0, i - WIN); j <= Math.min(pts.length - 1, i + WIN); j++) { sum += pts[j].ele; cnt++; }
+    return sum / cnt;
+  });
+  const climbs = [];
+  let i = 0;
+  while (i < smoothed.length - 1) {
+    if (smoothed[i + 1] > smoothed[i]) {
+      let j = i;
+      while (j < smoothed.length - 1) {
+        if (smoothed[j + 1] > smoothed[j]) { j++; continue; }
+        let k = j;
+        while (k < smoothed.length - 1 && smoothed[k + 1] <= smoothed[k] && (cum[k] - cum[j]) < 300) k++;
+        if (k < smoothed.length - 1 && smoothed[k + 1] > smoothed[k]) { j = k; continue; }
+        break;
+      }
+      let startIdx = i, endIdx = j;
+      let lengthM = cum[endIdx] - cum[startIdx];
+      let elevGain = smoothed[endIdx] - smoothed[startIdx];
+      let grade = lengthM > 0 ? (elevGain / lengthM) * 100 : 0;
+      let score = lengthM * grade;
+      let qualifies = lengthM >= 500 && grade >= 3 && score >= 1500;
+      if (!qualifies && lengthM >= 500) {
+        const suffix = findQualifyingSuffix(smoothed, cum, startIdx, endIdx);
+        if (suffix) { startIdx = suffix.startIdx; lengthM = suffix.lengthM; grade = suffix.grade; score = suffix.score; qualifies = true; }
+      }
+      if (qualifies) {
+        let peakSearchEnd = endIdx;
+        while (peakSearchEnd < pts.length - 1 && pts[peakSearchEnd + 1].ele >= pts[peakSearchEnd].ele) peakSearchEnd++;
+        let peakIdx = startIdx;
+        for (let m = startIdx; m <= peakSearchEnd; m++) if (pts[m].ele > pts[peakIdx].ele) peakIdx = m;
+        climbs.push({ startIdx, endIdx, peakIdx, startKm: cum[startIdx] / 1000, lengthM, grade, score, peakEle: pts[peakIdx].ele });
+      }
+      i = endIdx + 1;
+    } else i++;
+  }
+  return climbs;
+}
+function climbCategory(score) {
+  if (score > 64000) return { label: 'HC', color: '#7c2d12' };
+  if (score > 48000) return { label: 'Cat 1', color: '#dc2626' };
+  if (score > 32000) return { label: 'Cat 2', color: '#f97316' };
+  if (score > 16000) return { label: 'Cat 3', color: '#eab308' };
+  if (score > 8000)  return { label: 'Cat 4', color: '#22c55e' };
+  return { label: '-', color: '#5a7a9a' };
+}
+
+function hasCoordCollision(wpts, lat, lon) {
+  return wpts.some(w => Math.abs(w.lat - lat) < 1e-6 && Math.abs(w.lon - lon) < 1e-6);
+}
+async function resolveClimbWaypoint(pts, cum, peakIdx) {
+  const p = pts[peakIdx];
+  const info = await fetchPlaceInfo(p.lat, p.lon);
+  if (info.tunnels && info.tunnels.length) {
+    const entrance = findTunnelEntrance(pts, cum, peakIdx, info.tunnels);
+    if (entrance) {
+      const ep = pts[entrance.entranceIdx];
+      return { lat: ep.lat, lon: ep.lon, name: tunnelWaypointLabel(entrance.tunnelName), type: 'Summit', arrIdx: entrance.entranceIdx, km: cum[entrance.entranceIdx] / 1000, ele: ep.ele };
+    }
+  }
+  return { lat: p.lat, lon: p.lon, name: info.name || (Math.round(p.ele) + 'm'), type: 'Summit', arrIdx: peakIdx, km: cum[peakIdx] / 1000, ele: p.ele };
+}
+
+let lastClimbs = [];
+document.getElementById('btnDetectClimbs').addEventListener('click', () => {
+  const sec = activeSection();
+  if (!sec || !sec.points.length) return;
+  lastClimbs = detectClimbs(sec.points, sec.cumDist);
+  renderClimbResults();
+});
+function renderClimbResults() {
+  const el = document.getElementById('climbResults');
+  const sec = activeSection();
+  if (!lastClimbs.length) { el.innerHTML = '<div style="color:var(--dim); font-size:.78rem;">감지된 오르막이 없습니다.</div>'; return; }
+  el.innerHTML = lastClimbs.map((c, idx) => {
+    const cat = climbCategory(c.score);
+    return `<div class="climb-item" data-idx="${idx}">
+      <span>${fmtNum(c.startKm,1)}km · ${fmtNum(c.lengthM/1000,1)}km · ${fmtNum(c.grade,1)}% <b style="color:${cat.color}">${cat.label}</b></span>
+      <button type="button" class="climb-create-btn" data-idx="${idx}">생성</button>
+    </div>`;
+  }).join('') + `<button type="button" id="btnCreateAllClimbs" class="icon-btn" style="width:100%; border-radius:8px; margin-top:6px; font-size:.78rem;">전체 생성</button>`;
+
+  el.querySelectorAll('.climb-create-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const c = lastClimbs[parseInt(btn.dataset.idx)];
+      if (!c || !sec) return;
+      btn.disabled = true; btn.textContent = '...';
+      const p = sec.points[c.peakIdx];
+      if (hasCoordCollision(sec.waypoints, p.lat, p.lon)) { btn.textContent = '중복'; return; }
+      const wpt = await resolveClimbWaypoint(sec.points, sec.cumDist, c.peakIdx);
+      if (hasCoordCollision(sec.waypoints, wpt.lat, wpt.lon)) { btn.textContent = '중복'; return; }
+      sec.waypoints.push(wpt);
+      sec.waypoints.sort((a, b) => a.arrIdx - b.arrIdx);
+      renderMapContent();
+      renderWaypointList();
+      btn.textContent = '완료';
+    });
+  });
+  const allBtn = document.getElementById('btnCreateAllClimbs');
+  if (allBtn) allBtn.addEventListener('click', async () => {
+    if (!sec) return;
+    allBtn.disabled = true;
+    const btns = Array.from(el.querySelectorAll('.climb-create-btn')).filter(b => !b.disabled);
+    btns.forEach(b => { b.disabled = true; b.textContent = '...'; });
+    const jobs = [];
+    for (const b of btns) {
+      const c = lastClimbs[parseInt(b.dataset.idx)];
+      if (!c) continue;
+      const p = sec.points[c.peakIdx];
+      if (hasCoordCollision(sec.waypoints, p.lat, p.lon)) { b.textContent = '중복'; continue; }
+      jobs.push({ b, c });
+    }
+    await Promise.all(jobs.map(async job => {
+      const wpt = await resolveClimbWaypoint(sec.points, sec.cumDist, job.c.peakIdx);
+      if (hasCoordCollision(sec.waypoints, wpt.lat, wpt.lon)) { job.b.textContent = '중복'; return; }
+      sec.waypoints.push(wpt);
+      job.b.textContent = '완료';
+    }));
+    sec.waypoints.sort((a, b) => a.arrIdx - b.arrIdx);
+    renderMapContent();
+    renderWaypointList();
+    allBtn.textContent = '완료';
+  });
+}
+
+function renderWaypointList() {
+  const el = document.getElementById('wptListBody');
+  const sec = activeSection();
+  const wpts = sec ? sec.waypoints : [];
+  if (!wpts.length) { el.innerHTML = '<div style="color:var(--dim); font-size:.8rem;">아직 없음.</div>'; return; }
+  el.innerHTML = wpts.map((w, idx) => `
+    <div class="wpt-row" data-idx="${idx}">
+      <span class="wpt-row-main">${wptIcon(w.type)} ${escapeHtml(w.name || '이름없음')} · ${fmtNum(w.km,1)}km${garminPreviewHtml(w.name)}</span>
+      <button type="button" class="del-btn" data-idx="${idx}">삭제</button>
+    </div>`).join('');
+  el.querySelectorAll('.del-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      sec.waypoints.splice(parseInt(btn.dataset.idx), 1);
+      renderMapContent();
+      renderWaypointList();
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+//  구간 목록: 선택/순서변경/삭제/병합, 자르기 모드
+// ═══════════════════════════════════════════════════════
+function renderSectionList() {
+  const el = document.getElementById('sectionListBody');
+  if (!sections.length) { el.innerHTML = '<div style="color:var(--dim); font-size:.8rem;">파일을 불러오면 여기 표시됩니다.</div>'; return; }
+  el.innerHTML = sections.map((s, idx) => {
+    const st = calcStatsFor(s.points, s.cumDist);
+    const isActive = s.id === activeSectionId;
+    return `<div class="section-row${isActive ? ' active' : ''}">
+      <span class="name" data-select="${s.id}" title="클릭해서 선택"><span class="section-swatch" style="background:${sectionColor(idx)};"></span>${idx + 1}. ${escapeHtml(s.name)} · ${fmtNum(st.dist / 1000, 1)}km${s.corrected ? ' ✓' : ''}</span>
+      <span class="btns">
+        <button type="button" data-up="${s.id}" ${idx === 0 ? 'disabled' : ''}>▲</button>
+        <button type="button" data-down="${s.id}" ${idx === sections.length - 1 ? 'disabled' : ''}>▼</button>
+        <button type="button" data-merge="${s.id}" ${idx === sections.length - 1 ? 'disabled' : ''}>병합</button>
+        <button type="button" data-remove="${s.id}">삭제</button>
+      </span>
+    </div>`;
+  }).join('');
+
+  el.querySelectorAll('[data-select]').forEach(elx => elx.addEventListener('click', () => {
+    activeSectionId = elx.dataset.select;
+    lastClimbs = [];
+    document.getElementById('climbResults').innerHTML = '';
+    renderCourseInfo(); renderMapContent(); renderWaypointList(); renderSectionList();
+  }));
+  el.querySelectorAll('[data-up]').forEach(btn => btn.addEventListener('click', () => moveSectionUp(btn.dataset.up)));
+  el.querySelectorAll('[data-down]').forEach(btn => btn.addEventListener('click', () => moveSectionDown(btn.dataset.down)));
+  el.querySelectorAll('[data-merge]').forEach(btn => btn.addEventListener('click', () => mergeSectionWithNext(btn.dataset.merge)));
+  el.querySelectorAll('[data-remove]').forEach(btn => btn.addEventListener('click', () => removeSection(btn.dataset.remove)));
+}
+
+// 분할/파일추가 없이 빈 구간을 바로 만들어서 활성 구간으로 — 지도 빈 곳 클릭하면 이 구간에 그려짐
+function addEmptySection() {
+  const sec = { id: 'sec_' + (++sectionSeq) + '_' + Date.now(), name: 'Section' + (sections.length + 1), points: [], cumDist: [0], waypoints: [], corrected: false };
+  sections.push(sec);
+  activeSectionId = sec.id;
+  lastClimbs = [];
+  document.getElementById('climbResults').innerHTML = '';
+  renderCourseInfo(); renderMapContent(); renderWaypointList(); renderSectionList();
+}
+document.getElementById('btnAddSection').addEventListener('click', addEmptySection);
+
+function moveSectionUp(id) {
+  const idx = sections.findIndex(s => s.id === id);
+  if (idx <= 0) return;
+  [sections[idx - 1], sections[idx]] = [sections[idx], sections[idx - 1]];
+  renderMapContent(); renderSectionList(); renderCourseInfo();
+}
+function moveSectionDown(id) {
+  const idx = sections.findIndex(s => s.id === id);
+  if (idx < 0 || idx >= sections.length - 1) return;
+  [sections[idx], sections[idx + 1]] = [sections[idx + 1], sections[idx]];
+  renderMapContent(); renderSectionList(); renderCourseInfo();
+}
+function removeSection(id) {
+  const idx = sections.findIndex(s => s.id === id);
+  if (idx < 0) return;
+  sections.splice(idx, 1);
+  if (activeSectionId === id) activeSectionId = sections.length ? sections[0].id : null;
+  lastClimbs = [];
+  document.getElementById('climbResults').innerHTML = '';
+  renderCourseInfo(); renderMapContent(); renderWaypointList(); renderSectionList();
+  document.getElementById('btnCorrect').disabled = !sections.length;
+  document.getElementById('btnDetectClimbs').disabled = !sections.length;
+}
+function mergeSectionWithNext(id) {
+  const idx = sections.findIndex(s => s.id === id);
+  if (idx < 0 || idx >= sections.length - 1) return;
+  const a = sections[idx], b = sections[idx + 1];
+  const offset = a.points.length;
+  a.points = a.points.concat(b.points);
+  a.cumDist = computeCumDist(a.points);
+  a.waypoints = a.waypoints.concat(b.waypoints.map(w => ({ ...w, arrIdx: w.arrIdx + offset })));
+  a.waypoints.forEach(w => { w.km = a.cumDist[w.arrIdx] / 1000; });
+  a.corrected = a.corrected && b.corrected; // 하나라도 미보정이면 합친 것도 미보정 취급
+  sections.splice(idx + 1, 1);
+  if (activeSectionId === b.id) activeSectionId = a.id;
+  renderCourseInfo(); renderMapContent(); renderWaypointList(); renderSectionList();
+}
+function splitSectionAtPoint(sectionId, idx) {
+  const secIdx = sections.findIndex(s => s.id === sectionId);
+  if (secIdx < 0) return;
+  const sec = sections[secIdx];
+  if (idx <= 0 || idx >= sec.points.length - 1) { setStatus('끝점 근처는 자를 수 없습니다'); setTimeout(() => setStatus(''), 2000); return; }
+
+  const frontPoints = sec.points.slice(0, idx + 1);
+  const backPoints = sec.points.slice(idx);
+  const frontWpts = [], backWpts = [];
+  sec.waypoints.forEach(w => {
+    if (w.arrIdx <= idx) frontWpts.push(w);
+    else backWpts.push({ ...w, arrIdx: w.arrIdx - idx });
+  });
+  const frontCum = computeCumDist(frontPoints);
+  const backCum = computeCumDist(backPoints);
+  frontWpts.forEach(w => { w.km = frontCum[w.arrIdx] / 1000; });
+  backWpts.forEach(w => { w.km = backCum[w.arrIdx] / 1000; });
+
+  const newSection = {
+    id: 'sec_' + (++sectionSeq) + '_' + Date.now(),
+    name: sec.name + ' (2)',
+    points: backPoints, cumDist: backCum, waypoints: backWpts, corrected: sec.corrected
+  };
+  sec.points = frontPoints;
+  sec.cumDist = frontCum;
+  sec.waypoints = frontWpts;
+  sec.name = sec.name + ' (1)';
+
+  sections.splice(secIdx + 1, 0, newSection);
+  renderCourseInfo(); renderMapContent(); renderWaypointList(); renderSectionList();
+  setStatus('구간이 나뉘었습니다');
+  setTimeout(() => setStatus(''), 2000);
+}
+
+// ═══════════════════════════════════════════════════════
+//  지도 클릭 메뉴: 웨이포인트 추가 / 섹션 분할 / 카카오맵·로드뷰 보기
+//  (gpx-restorer의 wptMapRenderClickMenu/handleWptMapCreate 패턴 이식,
+//   clickable:true 누락 버그도 처음부터 반영)
+// ═══════════════════════════════════════════════════════
+let pendingMarkerKakao = null, pendingOverlayKakao = null, pendingMarkerOsm = null;
+
+function clearPending() {
+  if (pendingMarkerKakao) { pendingMarkerKakao.setMap(null); pendingMarkerKakao = null; }
+  if (pendingOverlayKakao) { pendingOverlayKakao.setMap(null); pendingOverlayKakao = null; }
+  if (pendingMarkerOsm) { pendingMarkerOsm.remove(); pendingMarkerOsm = null; }
+}
+
+function mapMenuHtml() {
+  return `<div class="map-click-menu">
+    <button type="button" class="mcm-item" data-action="wpt">📍 웨이포인트 추가</button>
+    <button type="button" class="mcm-item" data-action="split">✂️ 섹션 분할</button>
+    <a class="mcm-item" data-action="kakaomap" target="_blank" rel="noopener">🗺️ 카카오맵으로 보기</a>
+    <a class="mcm-item" data-action="roadview" target="_blank" rel="noopener">👀 카카오 로드뷰로 보기</a>
+  </div>`;
+}
+function renderClickMenu(box, section, idx, lat, lon) {
+  box.innerHTML = mapMenuHtml();
+  box.querySelector('[data-action="kakaomap"]').href = `https://map.kakao.com/link/map/${encodeURIComponent('지점')},${lat},${lon}`;
+  box.querySelector('[data-action="roadview"]').href = `https://map.kakao.com/link/roadview/${lat},${lon}`;
+  box.querySelector('[data-action="wpt"]').addEventListener('click', e => {
+    e.stopPropagation();
+    renderWptCreateForm(box, section, idx);
+  });
+  box.querySelector('[data-action="split"]').addEventListener('click', e => {
+    e.stopPropagation();
+    clearPending();
+    splitSectionAtPoint(section.id, idx);
+  });
+}
+function renderWptCreateForm(box, section, idx) {
+  const optionsHtml = WPT_TYPE_OPTIONS.map(o => `<option value="${o.value}"${o.value === 'Generic' ? ' selected' : ''}>${o.label}</option>`).join('');
+  box.innerHTML = `<div class="map-click-menu">
+    <input type="text" class="mcm-name" placeholder="이름 (선택)" autocomplete="off">
+    <select class="mcm-type">${optionsHtml}</select>
+    <div class="mcm-btns">
+      <button type="button" class="mcm-save">저장</button>
+      <button type="button" class="mcm-cancel">취소</button>
+    </div>
+  </div>`;
+  box.querySelector('.mcm-save').addEventListener('click', e => {
+    e.stopPropagation();
+    const name = box.querySelector('.mcm-name').value.trim();
+    const type = box.querySelector('.mcm-type').value;
+    const p = section.points[idx];
+    const wpt = { lat: p.lat, lon: p.lon, name: name || wptTypeLabel(type), type, arrIdx: idx, km: section.cumDist[idx] / 1000, ele: p.ele };
+    section.waypoints.push(wpt);
+    section.waypoints.sort((a, b) => a.arrIdx - b.arrIdx);
+    clearPending();
+    renderMapContent();
+    renderWaypointList();
+  });
+  box.querySelector('.mcm-cancel').addEventListener('click', e => { e.stopPropagation(); clearPending(); });
+}
+function wptTypeLabel(type) {
+  const found = WPT_TYPE_OPTIONS.find(o => o.value === type);
+  return found ? found.label : '웨이포인트';
+}
+
+// ── 이미 있는 웨이포인트 핀 클릭 → 편집(이름/유형 수정, 삭제) ──
+function renderWptEditForm(box, section, wpt) {
+  const optionsHtml = WPT_TYPE_OPTIONS.map(o => `<option value="${o.value}"${o.value === wpt.type ? ' selected' : ''}>${o.label}</option>`).join('');
+  box.innerHTML = `<div class="map-click-menu">
+    <input type="text" class="mcm-name" placeholder="이름" autocomplete="off">
+    <select class="mcm-type">${optionsHtml}</select>
+    <div class="mcm-btns">
+      <button type="button" class="mcm-save">저장</button>
+      <button type="button" class="mcm-delete">삭제</button>
+    </div>
+  </div>`;
+  box.querySelector('.mcm-name').value = wpt.name || '';
+  box.querySelector('.mcm-save').addEventListener('click', e => {
+    e.stopPropagation();
+    const name = box.querySelector('.mcm-name').value.trim();
+    const type = box.querySelector('.mcm-type').value;
+    wpt.type = type;
+    wpt.name = name || wptTypeLabel(type);
+    clearPending();
+    renderMapContent();
+    renderWaypointList();
+  });
+  box.querySelector('.mcm-delete').addEventListener('click', e => {
+    e.stopPropagation();
+    const idx = section.waypoints.indexOf(wpt);
+    if (idx >= 0) section.waypoints.splice(idx, 1);
+    clearPending();
+    renderMapContent();
+    renderWaypointList();
+  });
+}
+function openWptEditPopup(section, wpt) {
+  clearPending();
+  if (mapProvider === 'kakao' && kakaoMap) {
+    pendingMarkerKakao = new kakao.maps.Marker({ position: new kakao.maps.LatLng(wpt.lat, wpt.lon) });
+    pendingMarkerKakao.setMap(kakaoMap);
+    const box = document.createElement('div');
+    renderWptEditForm(box, section, wpt);
+    pendingOverlayKakao = new kakao.maps.CustomOverlay({
+      position: new kakao.maps.LatLng(wpt.lat, wpt.lon), content: box, yAnchor: 1.25, zIndex: 10, clickable: true
+    });
+    pendingOverlayKakao.setMap(kakaoMap);
+  } else if (osmMap) {
+    const box = document.createElement('div');
+    renderWptEditForm(box, section, wpt);
+    pendingMarkerOsm = L.marker([wpt.lat, wpt.lon]).addTo(osmMap);
+    pendingMarkerOsm.bindPopup(box, { closeOnClick: false }).openPopup();
+    pendingMarkerOsm.on('popupclose', () => { if (pendingMarkerOsm) { pendingMarkerOsm.remove(); pendingMarkerOsm = null; } });
+  }
+}
+
+// 기존 코스 선 근처 클릭이면 편집 메뉴, 아니면 그리기로 판단
+// 화면 픽셀 기준으로 판정함 — 미터 기준(예전 방식)은 줌을 축소하면 15m가 화면상 1~2px밖에 안 돼서
+// 선 위를 정확히 클릭해도 거의 항상 "그리기"로 빠지는 문제가 있었음
+const DRAW_CLICK_THRESHOLD_PX = 20; // 그리는 도중 방금 그은 선 근처를 계속 클릭하게 되는 경우가 많아서, 편집 메뉴가 너무 자주 끼어들지 않게 좁힘
+const DRAW_CLICK_THRESHOLD_M = 15; // 픽셀 좌표 변환이 안 될 때(지도 아직 없음 등)의 대비용 폴백
+
+// 클릭 지점(화면 픽셀)이 실제로 섹션 위 점(p) 근처인지 — 지도 종류별로 픽셀 좌표 변환 방식이 달라서 분기
+function isClickNearSectionPoint(p, clickPx) {
+  let px = null;
+  if (mapProvider === 'osm') {
+    if (!osmMap) return null;
+    px = osmMap.latLngToContainerPoint([p.lat, p.lon]);
+  } else {
+    if (!kakaoMap) return null;
+    px = kakaoMap.getProjection().containerPointFromCoords(new kakao.maps.LatLng(p.lat, p.lon));
+  }
+  if (!px) return null;
+  const dx = px.x - clickPx.x, dy = px.y - clickPx.y;
+  return Math.sqrt(dx * dx + dy * dy) <= DRAW_CLICK_THRESHOLD_PX;
+}
+
+function handleMapClick(lat, lon, clickPx) {
+  // 설정창 열어놓고 지도 편집을 다시 시작하면, 설정은 끝난 걸로 보고 자동으로 닫음 (✕ 눌러야만 닫히던 문제)
+  const settingsPanel = document.getElementById('settingsPanel');
+  if (!settingsPanel.hidden) togglePanel('settingsPanel', 'btnSettings');
+
+  if (pendingMarkerKakao || pendingMarkerOsm) { clearPending(); return; } // 메뉴 떠 있을 때 다른 곳 클릭하면 닫기만
+
+  if (sections.length) {
+    const found = nearestSectionAndIdx(lat, lon);
+    if (found) {
+      const p = found.section.points[found.idx];
+      const nearPx = clickPx ? isClickNearSectionPoint(p, clickPx) : null;
+      const isNear = nearPx !== null ? nearPx : haversineM(lat, lon, p.lat, p.lon) <= DRAW_CLICK_THRESHOLD_M;
+      if (isNear) {
+        showClickMenu(found.section, found.idx, p.lat, p.lon);
+        return;
+      }
+    }
+  }
+  handleDrawClick(lat, lon);
+}
+
+function showClickMenu(section, idx, lat, lon) {
+  if (mapProvider === 'kakao' && kakaoMap) {
+    pendingMarkerKakao = new kakao.maps.Marker({ position: new kakao.maps.LatLng(lat, lon) });
+    pendingMarkerKakao.setMap(kakaoMap);
+    const box = document.createElement('div');
+    renderClickMenu(box, section, idx, lat, lon);
+    pendingOverlayKakao = new kakao.maps.CustomOverlay({
+      position: new kakao.maps.LatLng(lat, lon), content: box, yAnchor: 1.25, zIndex: 10, clickable: true
+    });
+    pendingOverlayKakao.setMap(kakaoMap);
+  } else if (osmMap) {
+    const box = document.createElement('div');
+    renderClickMenu(box, section, idx, lat, lon);
+    pendingMarkerOsm = L.marker([lat, lon]).addTo(osmMap);
+    pendingMarkerOsm.bindPopup(box, { closeOnClick: false }).openPopup();
+    pendingMarkerOsm.on('popupclose', () => { if (pendingMarkerOsm) { pendingMarkerOsm.remove(); pendingMarkerOsm = null; } });
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  코스 그리기 — 빈 곳 클릭하면 도로를 따라(또는 직선으로) 이어붙임
+//  (라우팅 서버: 나스에 설치한 openrouteservice, 실측 확인된 요청 형식 그대로 사용)
+// ═══════════════════════════════════════════════════════
+const ORS_BASE_URL = 'http://100.99.3.82:8083'; // 나스 테일스케일 IP — 집 LAN IP(192.168.1.99)는 밖에서 접속 시 안 뚫림, 테일스케일 IP는 안팎 둘 다 됨
+
+async function snapToRoad(lat, lon) {
+  try {
+    const res = await fetch(ORS_BASE_URL + '/ors/v2/snap/' + orsProfile + '/json', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ locations: [[lon, lat]], radius: 350 })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const loc = data.locations && data.locations[0];
+    return loc ? loc.location : null; // [lon, lat]
+  } catch (e) { return null; }
+}
+async function fetchRoute(lat1, lon1, lat2, lon2) {
+  try {
+    const res = await fetch(ORS_BASE_URL + '/ors/v2/directions/' + orsProfile + '/geojson', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ coordinates: [[lon1, lat1], [lon2, lat2]], elevation: true })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.features[0].geometry.coordinates; // elevation:true라 [lon,lat,ele] — 참고용, 최종 확정은 "고도 보정"(스트라바)으로
+  } catch (e) { return null; }
+}
+
+async function handleDrawClick(lat, lon) {
+  let sec = activeSection();
+  if (!sec) {
+    sec = { id: 'sec_' + (++sectionSeq) + '_' + Date.now(), name: 'Section' + (sections.length + 1), points: [], cumDist: [0], waypoints: [], corrected: false };
+    sections.push(sec);
+    activeSectionId = sec.id;
+  }
+  const autoRoute = document.getElementById('autoRouteToggle').checked;
+
+  if (sec.points.length === 0) {
+    if (autoRoute) {
+      setStatus('도로 위치 찾는 중...');
+      const snapped = await snapToRoad(lat, lon);
+      const sLat = snapped ? snapped[1] : lat, sLon = snapped ? snapped[0] : lon;
+      // 같은 점을 시작/끝으로 넣어 "0m짜리 경로"를 요청하면 그 지점의 참고용 고도만 딸려옴 (별도 고도 전용 엔드포인트가 이 배포엔 없어서 쓰는 방법)
+      const selfRoute = await fetchRoute(sLat, sLon, sLat, sLon);
+      const ele = selfRoute && selfRoute[0] ? (selfRoute[0][2] || 0) : 0;
+      sec.points.push({ lat: sLat, lon: sLon, ele, time: null });
+    } else {
+      sec.points.push({ lat, lon, ele: 0, time: null });
+    }
+  } else {
+    const last = sec.points[sec.points.length - 1];
+    if (autoRoute) {
+      setStatus('경로 계산 중...');
+      const routeCoords = await fetchRoute(last.lat, last.lon, lat, lon);
+      if (routeCoords && routeCoords.length > 1) {
+        routeCoords.slice(1).forEach(c => sec.points.push({ lat: c[1], lon: c[0], ele: c[2] || 0, time: null })); // 참고용 고도 — 최종은 "고도 보정"으로
+      } else {
+        sec.points.push({ lat, lon, ele: 0, time: null });
+        setStatus('경로 계산 실패 - 직선으로 연결했습니다');
+        setTimeout(() => setStatus(''), 3000);
+      }
+    } else {
+      sec.points.push({ lat, lon, ele: 0, time: null });
+    }
+  }
+
+  sec.cumDist = computeCumDist(sec.points);
+  renderCourseInfo();
+  renderMapContent();
+  renderSectionList();
+  document.getElementById('btnCorrect').disabled = false;
+  document.getElementById('btnDetectClimbs').disabled = false;
+  if (document.getElementById('courseStatusText').textContent.includes('중...')) setStatus('');
+}
+
+// 프로바이더 스왑 시(설정 메뉴) 트랙/핀도 다시 그려야 함
+const _origApplyMapProvider = applyMapProvider;
+applyMapProvider = function() {
+  _origApplyMapProvider();
+  setTimeout(renderMapContent, 100);
+};
+</script>
+</body>
+</html>
