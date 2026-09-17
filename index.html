@@ -1364,9 +1364,10 @@ function showClickMenu(section, idx, lat, lon) {
 //  코스 그리기 — 빈 곳 클릭하면 도로를 따라(또는 직선으로) 이어붙임
 //  (라우팅 서버: 나스에 설치한 openrouteservice, 실측 확인된 요청 형식 그대로 사용)
 // ═══════════════════════════════════════════════════════
-// 테일스케일 Funnel로 공개 HTTPS로 노출한 문지기(nginx) 주소 — 나스/맥/아이패드 사설 IP는
-// 크롬의 Private/Local Network Access 정책 때문에 공개 HTTPS 페이지(GitHub Pages 등)에서 막혀서 씀
-const ORS_BASE_URL = 'https://nimario-ds.tail995566.ts.net';
+// 클라우드플레어 워커(ors-proxy)가 나스 ORS(테일스케일 Funnel)로 중계 — *.ts.net 주소를
+// 우리 기기에서 직접 부르면 테일스케일 자체 DNS가 사설 IP로 바로 꽂아버려서 크롬 Local
+// Network Access 제한에 걸림. 워커는 클라우드플레어 서버에서 도는 거라 이 문제가 없음.
+const ORS_BASE_URL = 'https://ors-proxy.strava-corrector.workers.dev';
 const ORS_GATEKEEPER_KEY = 'f02969dab707882182ad5264d5ec71a0af73948255e3b5b4'; // 나스 nginx 문지기(gatekeeper/nginx.conf)와 반드시 같은 값이어야 함
 
 async function snapToRoad(lat, lon) {
