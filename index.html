@@ -1394,7 +1394,29 @@ async function fetchRoute(lat1, lon1, lat2, lon2) {
   } catch (e) { return null; }
 }
 
+// 클릭 즉시 어디 눌렀는지 보이게 임시 점 — 경로 계산(도로 스냅/ORS)은 비동기라 시간이 좀 걸리는데,
+// 그 사이엔 화면에 아무것도 안 그려져서 "내가 어디 눌렀는지" 알 수가 없다는 피드백 반영
+let pendingDrawMarkerKakao = null, pendingDrawMarkerOsm = null;
+function showPendingDrawMarker(lat, lon) {
+  clearPendingDrawMarker();
+  if (mapProvider === 'kakao' && kakaoMap) {
+    const content = document.createElement('div');
+    content.style.cssText = 'width:12px;height:12px;border-radius:50%;background:#38bdf8;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.6);';
+    pendingDrawMarkerKakao = new kakao.maps.CustomOverlay({
+      position: new kakao.maps.LatLng(lat, lon), content, xAnchor: 0.5, yAnchor: 0.5, zIndex: 10
+    });
+    pendingDrawMarkerKakao.setMap(kakaoMap);
+  } else if (osmMap) {
+    pendingDrawMarkerOsm = L.circleMarker([lat, lon], { radius: 6, color: '#fff', weight: 2, fillColor: '#38bdf8', fillOpacity: 1 }).addTo(osmMap);
+  }
+}
+function clearPendingDrawMarker() {
+  if (pendingDrawMarkerKakao) { pendingDrawMarkerKakao.setMap(null); pendingDrawMarkerKakao = null; }
+  if (pendingDrawMarkerOsm) { pendingDrawMarkerOsm.remove(); pendingDrawMarkerOsm = null; }
+}
+
 async function handleDrawClick(lat, lon) {
+  showPendingDrawMarker(lat, lon);
   let sec = activeSection();
   if (!sec) {
     sec = { id: 'sec_' + (++sectionSeq) + '_' + Date.now(), name: 'Section' + (sections.length + 1), points: [], cumDist: [0], waypoints: [], corrected: false };
@@ -1433,6 +1455,7 @@ async function handleDrawClick(lat, lon) {
   }
 
   sec.cumDist = computeCumDist(sec.points);
+  clearPendingDrawMarker();
   renderCourseInfo();
   renderMapContent();
   renderSectionList();
