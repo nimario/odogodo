@@ -8,6 +8,7 @@
 <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=087df90dc4fa46d895cf2b1e374d3eff&libraries=services"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root {
     --bg:       #0b0f14;
@@ -30,6 +31,21 @@
   #mapShell { position:fixed; inset:0; width:100vw; height:100vh; }
   #mapKakao, #mapOsm { position:absolute; inset:0; width:100%; height:100%; }
   #mapKakao[hidden], #mapOsm[hidden] { display:none; }
+  .map-hover-tooltip {
+    position:absolute;
+    display:none;
+    pointer-events:none;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:6px;
+    padding:4px 8px;
+    font-size:.74rem;
+    font-weight:700;
+    color:var(--text);
+    white-space:nowrap;
+    z-index:1000;
+    transform:translate(12px, -50%);
+  }
 
   /* ── 플로팅 아이콘 버튼 (gpx-restorer .wpt-map-tool-btn 패턴 재사용) ── */
   .icon-btn {
@@ -106,12 +122,17 @@
     display:flex; justify-content:space-between; align-items:center; gap:6px;
     padding:6px 0; border-bottom:1px solid var(--border); font-size:.78rem;
   }
-  .climb-item button, .wpt-row .del-btn, .section-row button {
+  .climb-item button, .wpt-row .del-btn, .wpt-row .edit-btn, .section-row button {
     font-size:.72rem; padding:4px 8px; border-radius:6px; border:1px solid var(--border);
     background:var(--card); color:var(--text); cursor:pointer; flex-shrink:0;
   }
   .wpt-row-main { min-width:0; }
   .wpt-row-main small.wpt-garmin-warn { display:block; color:#f0a500; font-size:.7rem; margin-top:2px; }
+  .wpt-row-btns { display:flex; gap:4px; flex-shrink:0; }
+  .wpt-row-editing { gap:4px; }
+  .wpt-row-editing .wpt-edit-type { flex-shrink:0; font-size:.72rem; background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:3px; }
+  .wpt-row-editing .wpt-edit-name { min-width:0; flex:1; font-size:.78rem; background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:3px 6px; }
+  .wpt-edit-save, .wpt-edit-cancel { font-size:.72rem; padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer; flex-shrink:0; }
   .climb-item button:disabled, .section-row button:disabled { opacity:.4; cursor:default; }
   .section-row.active { color:var(--accent); }
   .section-row .name { cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -243,8 +264,23 @@
     <div class="panel-head"><h3>웨이포인트</h3><button type="button" class="panel-close" data-close-panel="waypointListPanel" data-close-btn="btnWptListToggle">✕</button></div>
     <button type="button" id="btnDetectClimbs" class="icon-btn" disabled
       style="width:auto; border-radius:8px; padding:6px 12px; font-size:.8rem; margin-bottom:8px;">⛰️ 오르막 자동 감지</button>
+    <button type="button" id="btnStartFinish" class="icon-btn" disabled
+      style="width:auto; border-radius:8px; padding:6px 12px; font-size:.8rem; margin-bottom:8px;">🚩 Start/Finish 생성</button>
     <div id="climbResults"></div>
+    <button type="button" id="btnExportCsv" class="icon-btn" disabled
+      style="width:auto; border-radius:8px; padding:6px 12px; font-size:.8rem; margin:8px 0;">📄 웨이포인트 CSV</button>
     <div id="wptListBody" style="color:var(--dim); font-size:.8rem;">파일을 불러오면 여기 표시됩니다.</div>
+  </div>
+</div>
+
+<div id="downloadPanel" class="panel panel-inline" hidden style="width:240px;">
+  <div class="panel-head"><h3>내보내기</h3><button type="button" class="panel-close" data-close-panel="downloadPanel" data-close-btn="btnDownload">✕</button></div>
+  <label style="font-size:.8rem; color:var(--dim); display:block; margin-bottom:4px;">코스 이름</label>
+  <input type="text" id="downloadCourseName" autocomplete="off"
+    style="width:100%; box-sizing:border-box; margin-bottom:10px; padding:6px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:.82rem;">
+  <div style="display:flex; gap:8px;">
+    <button type="button" id="btnExportGpx" class="icon-btn" style="width:auto; flex:1; border-radius:8px; padding:8px; font-size:.8rem;">⬇️ GPX</button>
+    <button type="button" id="btnExportTcx" class="icon-btn" style="width:auto; flex:1; border-radius:8px; padding:8px; font-size:.8rem;">⬇️ TCX</button>
   </div>
 </div>
 
@@ -259,7 +295,8 @@
 
 <div id="elevationPanel" class="panel" hidden>
   <div class="panel-head"><h3>고도 프로파일</h3><button type="button" class="panel-close" data-close-panel="elevationPanel" data-close-btn="btnElevationToggle">✕</button></div>
-  <div style="color:var(--dim); font-size:.8rem;">경로를 그리면 여기에 표시됩니다. (Phase B에서 연동)</div>
+  <div id="elevChartEmpty" style="color:var(--dim); font-size:.8rem;">경로를 그리면 여기에 표시됩니다.</div>
+  <div id="elevChartWrap" style="position:relative; height:110px;"><canvas id="elevChart" hidden></canvas></div>
 </div>
 
 <script>
@@ -345,6 +382,34 @@ document.getElementById('btnElevationToggle').addEventListener('click', () => to
 document.getElementById('btnWptListToggle').addEventListener('click', () => togglePanel('waypointListPanel', 'btnWptListToggle'));
 document.getElementById('btnSectionListToggle').addEventListener('click', () => togglePanel('sectionListPanel', 'btnSectionListToggle'));
 document.getElementById('btnSettings').addEventListener('click', () => togglePanel('settingsPanel', 'btnSettings'));
+document.getElementById('btnDownload').addEventListener('click', () => {
+  const nameEl = document.getElementById('downloadCourseName');
+  if (!nameEl.value.trim()) nameEl.value = (sections[0] && sections[0].name) || 'course';
+  togglePanel('downloadPanel', 'btnDownload');
+});
+document.getElementById('btnExportGpx').addEventListener('click', () => {
+  if (!sections.length) return;
+  const name = document.getElementById('downloadCourseName').value.trim() || 'course';
+  const { pts, wpts } = buildCombinedExport();
+  triggerDownload(buildGpx(name, pts, wpts), sanitizeFilename(name) + '.gpx', 'application/gpx+xml');
+});
+document.getElementById('btnExportTcx').addEventListener('click', () => {
+  if (!sections.length) return;
+  const name = document.getElementById('downloadCourseName').value.trim() || 'course';
+  const { pts, wpts, cumDist } = buildCombinedExport();
+  triggerDownload(buildTcx(name, pts, wpts, cumDist), sanitizeFilename(name) + '.tcx', 'application/vnd.garmin.tcx+xml');
+});
+document.getElementById('btnExportCsv').addEventListener('click', () => {
+  const sec = activeSection();
+  if (!sec || !sec.waypoints.length) return;
+  const header = ['이름', '누적거리(km)', '해발(m)'];
+  const rows = [header.map(csvEscape).join(',')];
+  for (const w of sec.waypoints) {
+    rows.push([csvEscape(w.name), w.km.toFixed(1), Math.round(w.ele)].join(','));
+  }
+  const name = (sec.name || 'course').trim() || 'course';
+  triggerDownload('﻿' + rows.join('\r\n'), sanitizeFilename(name) + '_waypoints.csv', 'text/csv;charset=utf-8');
+});
 
 // ── 패널 안의 ✕ 닫기 버튼 (아이콘을 다시 눌러야만 닫히는 걸 몰라서 못 닫는 문제 방지) ──
 document.querySelectorAll('.panel-close').forEach(btn => {
@@ -354,20 +419,51 @@ document.querySelectorAll('.panel-close').forEach(btn => {
   });
 });
 
+// ── 지도 전환 시 줌 위치/스케일 유지 — 카카오맵과 OSM은 각자 독립된 지도 인스턴스라 그냥 놔두면
+// 전환한 쪽이 자기 마지막 상태(또는 초기 위치)로 보여서 "줌이 초기화된 것처럼" 보임. 전환 직전
+// 화면 범위(위경도)를 캡처해뒀다가 전환 직후 그대로 적용해서 두 지도가 항상 같은 곳/스케일을 보게 함.
+function captureCurrentMapBounds() {
+  try {
+    if (mapProvider === 'osm') {
+      if (!osmMap) return null;
+      const b = osmMap.getBounds();
+      return { sw: { lat: b.getSouthWest().lat, lng: b.getSouthWest().lng }, ne: { lat: b.getNorthEast().lat, lng: b.getNorthEast().lng } };
+    } else {
+      if (!kakaoMap) return null;
+      const b = kakaoMap.getBounds();
+      return { sw: { lat: b.getSouthWest().getLat(), lng: b.getSouthWest().getLng() }, ne: { lat: b.getNorthEast().getLat(), lng: b.getNorthEast().getLng() } };
+    }
+  } catch (e) { return null; }
+}
+function applyBoundsToCurrentMap(bounds) {
+  if (!bounds) return;
+  if (mapProvider === 'osm') {
+    if (osmMap) osmMap.fitBounds(L.latLngBounds([bounds.sw.lat, bounds.sw.lng], [bounds.ne.lat, bounds.ne.lng]));
+  } else {
+    if (kakaoMap) kakaoMap.setBounds(new kakao.maps.LatLngBounds(new kakao.maps.LatLng(bounds.sw.lat, bounds.sw.lng), new kakao.maps.LatLng(bounds.ne.lat, bounds.ne.lng)));
+  }
+}
+
 // ── 지도 수동 스왑 (설정 메뉴) — 기본은 좌표 기반 자동이지만, 여기서 직접 고를 수 있음 ──
 function syncProviderButtons() {
   document.getElementById('btnProviderKakao').classList.toggle('active', mapProvider === 'kakao');
   document.getElementById('btnProviderOsm').classList.toggle('active', mapProvider === 'osm');
 }
 document.getElementById('btnProviderKakao').addEventListener('click', () => {
+  if (mapProvider === 'kakao') return;
+  const bounds = captureCurrentMapBounds();
   mapProvider = 'kakao';
   applyMapProvider();
   syncProviderButtons();
+  setTimeout(() => applyBoundsToCurrentMap(bounds), 150);
 });
 document.getElementById('btnProviderOsm').addEventListener('click', () => {
+  if (mapProvider === 'osm') return;
+  const bounds = captureCurrentMapBounds();
   mapProvider = 'osm';
   applyMapProvider();
   syncProviderButtons();
+  setTimeout(() => applyBoundsToCurrentMap(bounds), 150);
 });
 syncProviderButtons();
 
@@ -409,6 +505,7 @@ syncProfileButtons();
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') {
     e.preventDefault();
+    const bounds = captureCurrentMapBounds();
     if (mapProvider === 'osm') {
       kakaoMapType = 'ROADMAP';
       mapProvider = 'kakao';
@@ -420,6 +517,7 @@ document.addEventListener('keydown', e => {
     }
     syncProviderButtons();
     syncKakaoTypeButtons();
+    setTimeout(() => applyBoundsToCurrentMap(bounds), 150);
   }
 });
 
@@ -438,6 +536,7 @@ window.addEventListener('resize', () => { if (mapProvider === 'osm' && osmMap) o
 //  공통 유틸 (gpx-restorer index.html에서 이식, verbatim)
 // ═══════════════════════════════════════════════════════
 function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escapeAttr(s) { return escapeHtml(s).replace(/"/g, '&quot;'); }
 function decodeXml(s) { const el = document.createElement('textarea'); el.innerHTML = s; return el.value; }
 function fmtNum(n, decimals = 0) { return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }); }
 function haversine(a, b) {
@@ -593,6 +692,49 @@ let sections = [];        // [{ id, name, points, cumDist, waypoints, corrected 
 let activeSectionId = null;
 let sectionSeq = 0;
 function activeSection() { return sections.find(s => s.id === activeSectionId) || null; }
+
+// ── 실행취소/다시실행 — sections 전체를 스냅샷으로 찍어두는 방식(구간이 여러 개+포인트/웨이포인트가
+// 얽혀있어서 gpx-restorer처럼 웨이포인트만 따로 추적하는 것보다 전체 상태를 통째로 찍는 게 안전함) ──
+let undoStack = [], redoStack = [];
+const UNDO_LIMIT = 50;
+function snapshotState() {
+  return { sections: JSON.parse(JSON.stringify(sections)), activeSectionId };
+}
+function pushUndo() {
+  undoStack.push(snapshotState());
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  redoStack = [];
+  updateUndoRedoUI();
+}
+function restoreSnapshot(snap) {
+  sections = snap.sections;
+  activeSectionId = snap.activeSectionId;
+  lastClimbs = [];
+  document.getElementById('climbResults').innerHTML = '';
+  editingWptListIdx = null;
+  renderCourseInfo(); renderMapContent(); renderWaypointList(); renderSectionList();
+  const hasSections = sections.length > 0;
+  document.getElementById('btnCorrect').disabled = !hasSections;
+  document.getElementById('btnDetectClimbs').disabled = !hasSections;
+  document.getElementById('btnStartFinish').disabled = !hasSections;
+  document.getElementById('btnExportCsv').disabled = !hasSections;
+}
+function updateUndoRedoUI() {
+  document.getElementById('btnUndo').disabled = undoStack.length === 0;
+  document.getElementById('btnRedo').disabled = redoStack.length === 0;
+}
+document.getElementById('btnUndo').addEventListener('click', () => {
+  if (!undoStack.length) return;
+  redoStack.push(snapshotState());
+  restoreSnapshot(undoStack.pop());
+  updateUndoRedoUI();
+});
+document.getElementById('btnRedo').addEventListener('click', () => {
+  if (!redoStack.length) return;
+  undoStack.push(snapshotState());
+  restoreSnapshot(redoStack.pop());
+  updateUndoRedoUI();
+});
 const SECTION_COLORS = ['#e63946','#457b9d','#2a9d8f','#e9c46a','#f4a261','#a855f7'];
 function sectionColor(idx) { return SECTION_COLORS[idx % SECTION_COLORS.length]; }
 function calcStatsFor(pts, cum) {
@@ -685,6 +827,61 @@ function buildGpx(name, pts, wpts) {
   return out;
 }
 
+// 맥에서 만든 한글 파일명은 NFD(자모 분리)로 나올 수 있어서, 윈도우/가민에서 깨져 보이는 것 방지 (gpx-restorer 이식)
+function sanitizeFilename(s) {
+  return String(s || '').normalize('NFC').replace(/[\\/:*?"<>|]/g, '_').trim() || 'course';
+}
+
+function buildTcx(name, pts, wpts, cumDist) {
+  const esc = escapeHtml(name);
+  const speedMs = 20 * 1000 / 3600; // 가상 20km/h — 시간 정보 없는 코스라 TCX 포맷상 필요한 시간만 채움
+  const startMs = Date.now();
+  const totalDist = cumDist[cumDist.length - 1] || 0;
+  let out = '<?xml version="1.0" encoding="utf-8" standalone="no"?>\n<!-- odogodo -->\n<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">\n<Folders />\n<Courses>\n<Course>\n<Name>' + esc + '</Name>\n<Lap>\n';
+  out += '<TotalTimeSeconds>' + Math.round(totalDist / speedMs) + '</TotalTimeSeconds>\n<DistanceMeters>' + totalDist.toFixed(2) + '</DistanceMeters>\n<Intensity>Active</Intensity>\n</Lap>\n<Track>\n';
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const t = new Date(startMs + Math.round(cumDist[i] / speedMs) * 1000);
+    out += '<Trackpoint><Time>' + t.toISOString().replace(/\.\d{3}Z$/, 'Z') + '</Time><Position><LatitudeDegrees>' + p.lat + '</LatitudeDegrees><LongitudeDegrees>' + p.lon + '</LongitudeDegrees></Position><AltitudeMeters>' + p.ele + '</AltitudeMeters><DistanceMeters>' + cumDist[i].toFixed(2) + '</DistanceMeters></Trackpoint>\n';
+  }
+  out += '</Track>\n';
+  for (const w of wpts) {
+    const idx = w.arrIdx != null && w.arrIdx < pts.length ? w.arrIdx : 0;
+    const t2 = new Date(startMs + Math.round(cumDist[idx] / speedMs) * 1000);
+    out += '<CoursePoint><Name>' + escapeHtml(w.name || '') + '</Name><Time>' + t2.toISOString().replace(/\.\d{3}Z$/, 'Z') + '</Time><Position><LatitudeDegrees>' + w.lat + '</LatitudeDegrees><LongitudeDegrees>' + w.lon + '</LongitudeDegrees></Position><PointType>' + escapeHtml(w.type || 'Generic') + '</PointType></CoursePoint>\n';
+  }
+  out += '</Course>\n</Courses>\n</TrainingCenterDatabase>';
+  return out;
+}
+
+// 모든 구간(섹션)을 순서대로 이어붙여서 하나의 트랙으로 만듦 — 웨이포인트의 arrIdx도 이어붙인 배열 기준으로 다시 맞춤
+function buildCombinedExport() {
+  const pts = [], wpts = [];
+  sections.forEach(sec => {
+    const offset = pts.length;
+    sec.points.forEach(p => pts.push(p));
+    sec.waypoints.forEach(w => wpts.push({ ...w, arrIdx: offset + w.arrIdx }));
+  });
+  const cumDist = computeCumDist(pts);
+  return { pts, wpts, cumDist };
+}
+
+function csvEscape(s) {
+  const str = String(s);
+  return /[",\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+}
+
+function triggerDownload(content, filename, mime) {
+  const blob = new Blob([content], { type: mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
 function renderCourseInfo() {
   const sec = activeSection();
   if (!sections.length) {
@@ -699,6 +896,80 @@ function renderCourseInfo() {
   document.getElementById('courseNameText').textContent = name;
   document.getElementById('courseStatsText').textContent =
     fmtNum(totalDist / 1000, 1) + 'km · ↑' + fmtNum(Math.round(totalGain)) + 'm' + (sec && sec.corrected ? ' · 현재구간 보정됨' : '');
+  drawElevChart();
+}
+
+// ── 고도 프로파일 차트 (현재 활성 구간, restorer의 drawChart() 이식) ──
+let elevChart = null;
+function drawElevChart() {
+  const sec = activeSection();
+  const empty = document.getElementById('elevChartEmpty');
+  const canvas = document.getElementById('elevChart');
+  if (!sec || sec.points.length < 2 || typeof Chart === 'undefined') {
+    empty.hidden = false; canvas.hidden = true;
+    if (elevChart) { elevChart.destroy(); elevChart = null; }
+    return;
+  }
+  empty.hidden = true; canvas.hidden = false;
+
+  const points = sec.points, cumDist = sec.cumDist;
+  const MAX = 600;
+  let idxs = points.map((_, i) => i);
+  if (points.length > MAX) {
+    const step = Math.ceil(points.length / MAX);
+    idxs = idxs.filter(i => i % step === 0 || i === points.length - 1);
+  }
+  const totalDist = cumDist[cumDist.length - 1];
+  const labels = idxs.map(i => {
+    const d = cumDist[i];
+    if (totalDist >= 10000) return (d / 1000).toFixed(1) + ' km';
+    if (totalDist >= 1000) return (d / 1000).toFixed(2) + ' km';
+    return Math.round(d) + ' m';
+  });
+  const data = idxs.map(i => points[i].ele);
+
+  const ctx = canvas.getContext('2d');
+  if (elevChart) elevChart.destroy();
+  elevChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        borderColor: '#38bdf8', borderWidth: 2,
+        tension: .35, pointRadius: 0, fill: true,
+        backgroundColor: c => {
+          const area = c.chart.chartArea;
+          if (!area) return 'rgba(56,189,248,.15)';
+          const g = c.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+          g.addColorStop(0, 'rgba(56,189,248,.35)');
+          g.addColorStop(1, 'rgba(56,189,248,.02)');
+          return g;
+        }
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 300 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index', intersect: false,
+          backgroundColor: '#1a2740', borderColor: '#263550', borderWidth: 1,
+          titleColor: '#5a7a9a', bodyColor: '#dde5ef', padding: 10,
+          callbacks: {
+            title: it => '거리: ' + it[0].label,
+            label: it => '고도: ' + fmtNum(Number(it.raw), 1) + ' m'
+          }
+        }
+      },
+      scales: {
+        x: { grid: { color: 'rgba(38,53,80,.5)' }, ticks: { color: '#5a7a9a', maxTicksLimit: 8, maxRotation: 0 } },
+        y: { grid: { color: 'rgba(38,53,80,.6)' }, ticks: { color: '#5a7a9a', callback: v => v + ' m' } }
+      },
+      interaction: { mode: 'nearest', axis: 'x', intersect: false }
+    }
+  });
 }
 function setStatus(msg) {
   const el = document.getElementById('courseStatusText');
@@ -713,6 +984,7 @@ let trackLayersKakao = [], trackLayersOsm = [];
 let wptMarkersKakao = [], wptMarkersOsm = [];
 
 function clearMapContent() {
+  hideMapHoverTooltip();
   trackLayersKakao.forEach(l => l.setMap(null)); trackLayersKakao = [];
   trackLayersOsm.forEach(l => l.remove()); trackLayersOsm = [];
   wptMarkersKakao.forEach(o => { o.marker.setMap(null); if (o.label) o.label.setMap(null); });
@@ -753,6 +1025,12 @@ function renderMapContent(fitView = false) {
       const latlngs = sec.points.map(p => [p.lat, p.lon]);
       const isActive = sec.id === activeSectionId;
       const line = L.polyline(latlngs, { color: sectionColor(idx), weight: isActive ? 5 : 3 }).addTo(osmMap);
+      line.on('mousemove', e => {
+        const pIdx = nearestIdx(sec.points, e.latlng.lat, e.latlng.lng);
+        const pt = osmMap.latLngToContainerPoint(e.latlng);
+        updateMapHover(sec, pIdx, pt.x, pt.y);
+      });
+      line.on('mouseout', hideMapHoverTooltip);
       trackLayersOsm.push(line);
       allLatLngs.push(...latlngs);
       sec.waypoints.forEach(w => {
@@ -765,6 +1043,97 @@ function renderMapContent(fitView = false) {
     if (fitView && allLatLngs.length) osmMap.fitBounds(L.latLngBounds(allLatLngs));
   }
 }
+
+// ── 코스 선에 마우스 올리면 거리·해발고도 툴팁, 왕복 코스처럼 겹친 구간은 우클릭으로 순환 (gpx-restorer 웨이포인트 편집맵 기능 이식) ──
+let mapHoverTooltipEl = null;
+let mapHoverSection = null, mapHoverIdx = null, mapHoverX = 0, mapHoverY = 0;
+let mapHoverCandidates = null, mapHoverCandSel = 0;
+function ensureMapHoverTooltip() {
+  if (mapHoverTooltipEl) return mapHoverTooltipEl;
+  mapHoverTooltipEl = document.createElement('div');
+  mapHoverTooltipEl.className = 'map-hover-tooltip';
+  document.getElementById('mapShell').appendChild(mapHoverTooltipEl);
+  return mapHoverTooltipEl;
+}
+function showMapHoverTooltip(x, y, sec, idx) {
+  const p = sec.points[idx];
+  if (!p) return;
+  const el = ensureMapHoverTooltip();
+  el.textContent = fmtNum(sec.cumDist[idx] / 1000, 1) + ' km · ' + Math.round(p.ele) + ' m';
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+  el.style.display = 'block';
+}
+function updateMapHover(sec, idx, x, y) {
+  mapHoverSection = sec; mapHoverIdx = idx; mapHoverX = x; mapHoverY = y;
+  mapHoverCandidates = null; mapHoverCandSel = 0;
+  showMapHoverTooltip(x, y, sec, idx);
+}
+function hideMapHoverTooltip() {
+  if (mapHoverTooltipEl) mapHoverTooltipEl.style.display = 'none';
+  mapHoverSection = null; mapHoverIdx = null; mapHoverCandidates = null;
+}
+// 같은 화면 자리에 겹쳐있는 다른 구간(왕복 코스 등)의 {section, idx}들을 찾음 — s1FindOverlapCandidates의 다구간판
+function findMapOverlapCandidates(centerSec, centerIdx) {
+  const p0 = centerSec.points[centerIdx];
+  const GEO_THRESHOLD_M = 15, MIN_KM_SEPARATION = 0.05;
+  const centerKm = centerSec.cumDist[centerIdx] / 1000;
+  const results = [{ section: centerSec, idx: centerIdx }];
+  sections.forEach(sec => {
+    const matches = [];
+    for (let i = 0; i < sec.points.length; i++) {
+      if (sec === centerSec && Math.abs(sec.cumDist[i] / 1000 - centerKm) < MIN_KM_SEPARATION) continue;
+      if (haversineM(p0.lat, p0.lon, sec.points[i].lat, sec.points[i].lon) <= GEO_THRESHOLD_M) matches.push(i);
+    }
+    if (!matches.length) return;
+    matches.sort((a, b) => a - b);
+    const clusters = [];
+    for (const i of matches) {
+      const last = clusters[clusters.length - 1];
+      if (last && i - last[last.length - 1] <= 5) last.push(i); else clusters.push([i]);
+    }
+    clusters.forEach(c => {
+      const rep = c.reduce((best, i) => {
+        const d = haversineM(p0.lat, p0.lon, sec.points[i].lat, sec.points[i].lon);
+        return (!best || d < best.d) ? { i, d } : best;
+      }, null).i;
+      results.push({ section: sec, idx: rep });
+    });
+  });
+  return results;
+}
+// 카카오맵 Polyline은 mousemove를 안정적으로 안 쏴서(레거시 이슈), 지도 컨테이너에 네이티브 DOM mousemove를 붙여
+// 직접 좌표변환 + 최근접점 계산으로 호버 판정 (gpx-restorer s1WptMapNativeMouseMove와 동일 패턴)
+function mapKakaoNativeMouseMove(evt) {
+  if (mapProvider !== 'kakao' || !kakaoMap || !sections.length) return;
+  const rect = evt.currentTarget.getBoundingClientRect();
+  const x = evt.clientX - rect.left, y = evt.clientY - rect.top;
+  const latlng = kakaoMap.getProjection().coordsFromContainerPoint(new kakao.maps.Point(x, y));
+  const found = nearestSectionAndIdx(latlng.getLat(), latlng.getLng());
+  if (!found) { hideMapHoverTooltip(); return; }
+  const p = found.section.points[found.idx];
+  const pt = kakaoMap.getProjection().containerPointFromCoords(new kakao.maps.LatLng(p.lat, p.lon));
+  if (Math.hypot(pt.x - x, pt.y - y) <= 14) {
+    updateMapHover(found.section, found.idx, x, y);
+  } else {
+    hideMapHoverTooltip();
+  }
+}
+document.getElementById('mapKakao').addEventListener('mousemove', mapKakaoNativeMouseMove);
+document.getElementById('mapKakao').addEventListener('mouseleave', () => { if (mapProvider === 'kakao') hideMapHoverTooltip(); });
+// 호버 중 우클릭 — 같은 자리에 겹친 다른 구간/패스로 순환 전환
+function mapHoverContextMenu(evt) {
+  if (mapHoverIdx === null || !mapHoverSection) return;
+  evt.preventDefault();
+  if (!mapHoverCandidates) mapHoverCandidates = findMapOverlapCandidates(mapHoverSection, mapHoverIdx);
+  if (mapHoverCandidates.length <= 1) return;
+  mapHoverCandSel = (mapHoverCandSel + 1) % mapHoverCandidates.length;
+  const c = mapHoverCandidates[mapHoverCandSel];
+  mapHoverSection = c.section; mapHoverIdx = c.idx;
+  showMapHoverTooltip(mapHoverX, mapHoverY, mapHoverSection, mapHoverIdx);
+}
+document.getElementById('mapKakao').addEventListener('contextmenu', mapHoverContextMenu);
+document.getElementById('mapOsm').addEventListener('contextmenu', mapHoverContextMenu);
 
 // ═══════════════════════════════════════════════════════
 //  파일 Import
@@ -785,6 +1154,9 @@ function resetAllSections() {
   sections = [];
   activeSectionId = null;
   lastClimbs = [];
+  undoStack = [];
+  redoStack = [];
+  updateUndoRedoUI();
   document.getElementById('climbResults').innerHTML = '';
   renderCourseInfo();
   renderMapContent();
@@ -792,6 +1164,8 @@ function resetAllSections() {
   renderSectionList();
   document.getElementById('btnCorrect').disabled = true;
   document.getElementById('btnDetectClimbs').disabled = true;
+  document.getElementById('btnStartFinish').disabled = true;
+  document.getElementById('btnExportCsv').disabled = true;
 }
 document.getElementById('btnNew').addEventListener('click', resetAllSections);
 
@@ -837,6 +1211,7 @@ function addSectionFromFile(file) {
       name: 'Section' + (sections.length + 1), // 파일명이 길면 목록이 안 읽혀서 순번으로 단순화
       points: pts, cumDist: cum, waypoints: wpts, corrected: false
     };
+    pushUndo();
     sections.push(sec);
     activeSectionId = sec.id;
 
@@ -847,6 +1222,8 @@ function addSectionFromFile(file) {
     setStatus('');
     document.getElementById('btnCorrect').disabled = false;
     document.getElementById('btnDetectClimbs').disabled = false;
+    document.getElementById('btnStartFinish').disabled = false;
+    document.getElementById('btnExportCsv').disabled = false;
   };
   reader.readAsText(file);
 }
@@ -995,6 +1372,26 @@ document.getElementById('btnDetectClimbs').addEventListener('click', () => {
   lastClimbs = detectClimbs(sec.points, sec.cumDist);
   renderClimbResults();
 });
+
+// "🚩 Start/Finish 생성" 버튼 — gpx-restorer와 동일한 방식(버튼 눌러야만 생성, 근처에 이미 있으면 중복 생성 안 함) 이식
+document.getElementById('btnStartFinish').addEventListener('click', () => {
+  const sec = activeSection();
+  if (!sec || sec.points.length < 2) return;
+  pushUndo();
+  const lastIdx = sec.points.length - 1;
+  const first = sec.points[0], last = sec.points[lastIdx];
+  const totalKm = sec.cumDist[lastIdx] / 1000;
+  const NEAR_KM = 0.2; // 이 거리 안에 이미 웨이포인트가 있으면 "시작/끝 표시가 이미 있다"고 봄
+  if (!sec.waypoints.some(w => w.km <= NEAR_KM)) {
+    sec.waypoints.push({ lat: first.lat, lon: first.lon, name: 'Start', type: 'Generic', arrIdx: 0, km: 0, ele: first.ele });
+  }
+  if (!sec.waypoints.some(w => totalKm - w.km <= NEAR_KM)) {
+    sec.waypoints.push({ lat: last.lat, lon: last.lon, name: 'Finish', type: 'Generic', arrIdx: lastIdx, km: totalKm, ele: last.ele });
+  }
+  sec.waypoints.sort((a, b) => a.arrIdx - b.arrIdx);
+  renderMapContent();
+  renderWaypointList();
+});
 function renderClimbResults() {
   const el = document.getElementById('climbResults');
   const sec = activeSection();
@@ -1016,6 +1413,7 @@ function renderClimbResults() {
       if (hasCoordCollision(sec.waypoints, p.lat, p.lon)) { btn.textContent = '중복'; return; }
       const wpt = await resolveClimbWaypoint(sec.points, sec.cumDist, c.peakIdx);
       if (hasCoordCollision(sec.waypoints, wpt.lat, wpt.lon)) { btn.textContent = '중복'; return; }
+      pushUndo();
       sec.waypoints.push(wpt);
       sec.waypoints.sort((a, b) => a.arrIdx - b.arrIdx);
       renderMapContent();
@@ -1037,6 +1435,7 @@ function renderClimbResults() {
       if (hasCoordCollision(sec.waypoints, p.lat, p.lon)) { b.textContent = '중복'; continue; }
       jobs.push({ b, c });
     }
+    if (jobs.length) pushUndo();
     await Promise.all(jobs.map(async job => {
       const wpt = await resolveClimbWaypoint(sec.points, sec.cumDist, job.c.peakIdx);
       if (hasCoordCollision(sec.waypoints, wpt.lat, wpt.lon)) { job.b.textContent = '중복'; return; }
@@ -1050,22 +1449,69 @@ function renderClimbResults() {
   });
 }
 
+let editingWptListIdx = null; // 리스트에서 인라인으로 이름/유형 수정 중인 행 인덱스 (restorer의 편집 행 패턴 이식)
+
+function wptListEditRowHtml(w, idx) {
+  const optionsHtml = WPT_TYPE_OPTIONS.map(o => `<option value="${o.value}"${o.value === w.type ? ' selected' : ''}>${o.label}</option>`).join('');
+  return `<div class="wpt-row wpt-row-editing" data-idx="${idx}">
+      <select class="wpt-edit-type">${optionsHtml}</select>
+      <input type="text" class="wpt-edit-name" value="${escapeAttr(w.name || '')}" autocomplete="off">
+      <span class="wpt-row-btns">
+        <button type="button" class="wpt-edit-save" data-idx="${idx}" title="저장">✓</button>
+        <button type="button" class="wpt-edit-cancel" data-idx="${idx}" title="취소">✕</button>
+      </span>
+    </div>`;
+}
+
 function renderWaypointList() {
   const el = document.getElementById('wptListBody');
   const sec = activeSection();
   const wpts = sec ? sec.waypoints : [];
-  if (!wpts.length) { el.innerHTML = '<div style="color:var(--dim); font-size:.8rem;">아직 없음.</div>'; return; }
-  el.innerHTML = wpts.map((w, idx) => `
+  if (!wpts.length) { el.innerHTML = '<div style="color:var(--dim); font-size:.8rem;">아직 없음.</div>'; editingWptListIdx = null; return; }
+  el.innerHTML = wpts.map((w, idx) => {
+    if (editingWptListIdx === idx) return wptListEditRowHtml(w, idx);
+    return `
     <div class="wpt-row" data-idx="${idx}">
       <span class="wpt-row-main">${wptIcon(w.type)} ${escapeHtml(w.name || '이름없음')} · ${fmtNum(w.km,1)}km${garminPreviewHtml(w.name)}</span>
-      <button type="button" class="del-btn" data-idx="${idx}">삭제</button>
-    </div>`).join('');
+      <span class="wpt-row-btns">
+        <button type="button" class="edit-btn" data-idx="${idx}" title="이름/유형 수정">✏️</button>
+        <button type="button" class="del-btn" data-idx="${idx}">삭제</button>
+      </span>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('.edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      editingWptListIdx = parseInt(btn.dataset.idx);
+      renderWaypointList();
+    });
+  });
   el.querySelectorAll('.del-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      sec.waypoints.splice(parseInt(btn.dataset.idx), 1);
+      const idx = parseInt(btn.dataset.idx);
+      pushUndo();
+      sec.waypoints.splice(idx, 1);
+      if (editingWptListIdx === idx) editingWptListIdx = null;
       renderMapContent();
       renderWaypointList();
     });
+  });
+  el.querySelectorAll('.wpt-edit-save').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      const row = btn.closest('.wpt-row-editing');
+      const name = row.querySelector('.wpt-edit-name').value.trim();
+      const type = row.querySelector('.wpt-edit-type').value;
+      const w = wpts[idx];
+      pushUndo();
+      w.type = type;
+      w.name = name || wptTypeLabel(type);
+      editingWptListIdx = null;
+      renderMapContent();
+      renderWaypointList();
+    });
+  });
+  el.querySelectorAll('.wpt-edit-cancel').forEach(btn => {
+    btn.addEventListener('click', () => { editingWptListIdx = null; renderWaypointList(); });
   });
 }
 
@@ -1104,6 +1550,7 @@ function renderSectionList() {
 // 분할/파일추가 없이 빈 구간을 바로 만들어서 활성 구간으로 — 지도 빈 곳 클릭하면 이 구간에 그려짐
 function addEmptySection() {
   const sec = { id: 'sec_' + (++sectionSeq) + '_' + Date.now(), name: 'Section' + (sections.length + 1), points: [], cumDist: [0], waypoints: [], corrected: false };
+  pushUndo();
   sections.push(sec);
   activeSectionId = sec.id;
   lastClimbs = [];
@@ -1115,18 +1562,21 @@ document.getElementById('btnAddSection').addEventListener('click', addEmptySecti
 function moveSectionUp(id) {
   const idx = sections.findIndex(s => s.id === id);
   if (idx <= 0) return;
+  pushUndo();
   [sections[idx - 1], sections[idx]] = [sections[idx], sections[idx - 1]];
   renderMapContent(); renderSectionList(); renderCourseInfo();
 }
 function moveSectionDown(id) {
   const idx = sections.findIndex(s => s.id === id);
   if (idx < 0 || idx >= sections.length - 1) return;
+  pushUndo();
   [sections[idx], sections[idx + 1]] = [sections[idx + 1], sections[idx]];
   renderMapContent(); renderSectionList(); renderCourseInfo();
 }
 function removeSection(id) {
   const idx = sections.findIndex(s => s.id === id);
   if (idx < 0) return;
+  pushUndo();
   sections.splice(idx, 1);
   if (activeSectionId === id) activeSectionId = sections.length ? sections[0].id : null;
   lastClimbs = [];
@@ -1134,10 +1584,13 @@ function removeSection(id) {
   renderCourseInfo(); renderMapContent(); renderWaypointList(); renderSectionList();
   document.getElementById('btnCorrect').disabled = !sections.length;
   document.getElementById('btnDetectClimbs').disabled = !sections.length;
+  document.getElementById('btnStartFinish').disabled = !sections.length;
+  document.getElementById('btnExportCsv').disabled = !sections.length;
 }
 function mergeSectionWithNext(id) {
   const idx = sections.findIndex(s => s.id === id);
   if (idx < 0 || idx >= sections.length - 1) return;
+  pushUndo();
   const a = sections[idx], b = sections[idx + 1];
   const offset = a.points.length;
   a.points = a.points.concat(b.points);
@@ -1154,6 +1607,7 @@ function splitSectionAtPoint(sectionId, idx) {
   if (secIdx < 0) return;
   const sec = sections[secIdx];
   if (idx <= 0 || idx >= sec.points.length - 1) { setStatus('끝점 근처는 자를 수 없습니다'); setTimeout(() => setStatus(''), 2000); return; }
+  pushUndo();
 
   const frontPoints = sec.points.slice(0, idx + 1);
   const backPoints = sec.points.slice(idx);
@@ -1234,6 +1688,7 @@ function renderWptCreateForm(box, section, idx) {
     const type = box.querySelector('.mcm-type').value;
     const p = section.points[idx];
     const wpt = { lat: p.lat, lon: p.lon, name: name || wptTypeLabel(type), type, arrIdx: idx, km: section.cumDist[idx] / 1000, ele: p.ele };
+    pushUndo();
     section.waypoints.push(wpt);
     section.waypoints.sort((a, b) => a.arrIdx - b.arrIdx);
     clearPending();
@@ -1263,6 +1718,7 @@ function renderWptEditForm(box, section, wpt) {
     e.stopPropagation();
     const name = box.querySelector('.mcm-name').value.trim();
     const type = box.querySelector('.mcm-type').value;
+    pushUndo();
     wpt.type = type;
     wpt.name = name || wptTypeLabel(type);
     clearPending();
@@ -1272,7 +1728,7 @@ function renderWptEditForm(box, section, wpt) {
   box.querySelector('.mcm-delete').addEventListener('click', e => {
     e.stopPropagation();
     const idx = section.waypoints.indexOf(wpt);
-    if (idx >= 0) section.waypoints.splice(idx, 1);
+    if (idx >= 0) { pushUndo(); section.waypoints.splice(idx, 1); }
     clearPending();
     renderMapContent();
     renderWaypointList();
@@ -1327,11 +1783,14 @@ function handleMapClick(lat, lon, clickPx) {
   if (pendingMarkerKakao || pendingMarkerOsm) { clearPending(); return; } // 메뉴 떠 있을 때 다른 곳 클릭하면 닫기만
 
   if (sections.length) {
-    const found = nearestSectionAndIdx(lat, lon);
+    // 방금 호버 중이던 지점(우클릭으로 겹친 구간을 순환했을 수 있음)과 클릭 위치가 같은 자리면 그 지점을 그대로 사용
+    const useHover = clickPx && mapHoverIdx !== null && mapHoverSection &&
+      Math.hypot(mapHoverX - clickPx.x, mapHoverY - clickPx.y) <= DRAW_CLICK_THRESHOLD_PX;
+    const found = useHover ? { section: mapHoverSection, idx: mapHoverIdx } : nearestSectionAndIdx(lat, lon);
     if (found) {
       const p = found.section.points[found.idx];
       const nearPx = clickPx ? isClickNearSectionPoint(p, clickPx) : null;
-      const isNear = nearPx !== null ? nearPx : haversineM(lat, lon, p.lat, p.lon) <= DRAW_CLICK_THRESHOLD_M;
+      const isNear = useHover || (nearPx !== null ? nearPx : haversineM(lat, lon, p.lat, p.lon) <= DRAW_CLICK_THRESHOLD_M);
       if (isNear) {
         showClickMenu(found.section, found.idx, p.lat, p.lon);
         return;
@@ -1416,6 +1875,7 @@ function clearPendingDrawMarker() {
 }
 
 async function handleDrawClick(lat, lon) {
+  pushUndo();
   showPendingDrawMarker(lat, lon);
   let sec = activeSection();
   if (!sec) {
@@ -1461,6 +1921,8 @@ async function handleDrawClick(lat, lon) {
   renderSectionList();
   document.getElementById('btnCorrect').disabled = false;
   document.getElementById('btnDetectClimbs').disabled = false;
+  document.getElementById('btnStartFinish').disabled = false;
+  document.getElementById('btnExportCsv').disabled = false;
   if (document.getElementById('courseStatusText').textContent.includes('중...')) setStatus('');
 }
 
